@@ -1,0 +1,59 @@
+[
+  {
+    "name": "france_capital",
+    "prompt": "The capital of France is",
+    "target_text": " Paris",
+    "variants": [
+      {
+        "name": "matched",
+        "donor_text": "France's capital city is Paris. Paris is the capital of France."
+      },
+      {
+        "name": "adversarial",
+        "donor_text": "France's capital city is Lyon. Lyon is the capital of France."
+      },
+      {
+        "name": "unrelated",
+        "donor_text": "Bananas and mangoes are tropical fruits that grow in warm climates."
+      }
+    ]
+  },
+  {
+    "name": "gold_symbol",
+    "prompt": "The chemical symbol of gold is",
+    "target_text": " Au",
+    "variants": [
+      {
+        "name": "matched",
+        "donor_text": "Gold has the chemical symbol Au. Au is the symbol for gold."
+      },
+      {
+        "name": "adversarial",
+        "donor_text": "Gold has the chemical symbol Ag. Ag is the symbol for gold."
+      },
+      {
+        "name": "unrelated",
+        "donor_text": "Oak trees can live for many years and grow from acorns."
+      }
+    ]
+  },
+  {
+    "name": "largest_planet",
+    "prompt": "The largest planet in the solar system is",
+    "target_text": " Jupiter",
+    "variants": [
+      {
+        "name": "matched",
+        "donor_text": "Jupiter is the largest planet in the solar system."
+      },
+      {
+        "name": "adversarial",
+        "donor_text": "Saturn is the largest planet in the solar system."
+      },
+      {
+        "name": "unrelated",
+        "donor_text": "Sharks are fish that live in the ocean and breathe through gills."
+      }
+    ]
+  }
+]

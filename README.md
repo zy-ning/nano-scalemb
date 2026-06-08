@@ -21,11 +21,13 @@ in the blog post above.
 
 - **d-series transformers** with FP8 training, sliding-window attention, Muon +
   AdamW optimizers (`nano_scalemb/gpt.py`, `optim.py`, `engine.py`).
-- **mHC** — Manifold-Constrained Hyper-Connections: persistent multi-stream
-  residuals with a Sinkhorn-balanced, content-dependent router
-  (`nano_scalemb/mhc.py`).
-- **Engram** — a training-free n-gram hash *memory* injected at chosen layers,
-  fused as a per-stream branch through mHC (`nano_scalemb/engram.py`).
+- **mHC** — [Manifold-Constrained Hyper-Connections](https://arxiv.org/abs/2512.24880):
+  persistent multi-stream residuals with three content-dependent transforms per
+  layer (H_pre / H_res / H_post), the stream-mixing H_res kept doubly-stochastic
+  via Sinkhorn-Knopp (`nano_scalemb/mhc.py`).
+- **Engram** — an [n-gram hash *memory*](https://arxiv.org/abs/2601.07372) (fixed
+  hash addressing, learned contents) injected at chosen layers, fused as a
+  per-stream branch through mHC (`nano_scalemb/engram.py`).
 - **Two-tier interpretability probes** for the Engram (both cheap, both CPU):
   - **Tier-1 weight probe** — `scripts/engram_weight_probe.py`: reads what was
     learned straight from the checkpoint (no forward pass).
@@ -77,7 +79,7 @@ command:
 |---|---|---|
 | Does the memory help? | `docs/blog/ablation_sweep.html` | `runs/run_engram_ablation_sweep_21218_mhc.sh` |
 | How many layers, and where? | `docs/blog/layer_count_sweep.html` | `runs/run_{one,two,four}_layer_sweep_mhc.sh` |
-| Is the read causal? | `docs/blog/donor_probe.html` | `runs/run_engram_donor_probe_81216.sh` |
+| Is the read causal? | `docs/blog/donor_probe.html` | `runs/run_engram_donor_probe_21218.sh` |
 | What did it learn? (weights) | `docs/blog/weight_probe.html` | `scripts/engram_weight_probe.py` |
 | What does it do? (inference) | `docs/blog/forward_probe.html` | `scripts/engram_forward_probe.py` |
 
