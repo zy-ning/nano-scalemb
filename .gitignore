@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.pytest_cache/
+data/
+logs/
+wandb/
+runs/logs/
+runs/reports/
+checkpoints/
+
+docs/engram_mhc_fusion_paths.md
