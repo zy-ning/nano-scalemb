@@ -1,17 +1,27 @@
 """Engram ablation sweep (21218, true-backbone MHC, mhc-head-fix 20260507).
 
-Compares four variants on the same MHC backbone with Engram layers 2,12,18:
+Compares five variants on the same MHC backbone with Engram layers 2,12,18:
   - MHC baseline  (Engram off)
   - Real engram   (genuine n-gram memory)
-  - Randomized    (Engram slots randomized)
-  - Uniform       (Engram slots uniform)
+  - Randomized    (Engram slots randomized, frozen)
+  - Uniform       (Engram slots uniform, frozen)
+  - MLP control   (capacity/FLOP-matched: routed branch with a learned projection
+                   payload, NO n-gram lookup and NO memory table at all)
+
+The MLP control isolates "extra trainable branch capacity" from "memory content":
+it carries the same ~+36M trainable params over baseline as Randomized/Uniform
+(transformer_matrices 722.4M vs 686.6M; their frozen 1.64B tables don't train),
+but its payload is a learned projection rather than a content-free lookup.
 
 Split by evaluation stage:
   Top row    : base model evaluation  -> CORE (higher better) + val bpb (lower better)
   Bottom row : SFT / chat evaluation  -> ChatCORE, ARC-E/C, MMLU, GSM8K, HumanEval
 
-Palette: Catppuccin Latte. Lavender = real Engram (the hero), subtext = MHC baseline.
-Source: nanochat/runs/reports/engram_ablation_sweep_21218_true_backbone_mhc-mhcheadfix-20260507
+Palette: Catppuccin Latte. Lavender = real Engram (the hero), subtext = MHC baseline,
+overlay = MLP control (the capacity-only control).
+Sources:
+  nanochat/runs/reports/engram_ablation_sweep_21218_true_backbone_mhc-mhcheadfix-20260507
+  nano-scalemb/runs/reports/engram_mlp_control_21218_mhc  (MLP control)
 """
 
 from __future__ import annotations
@@ -24,7 +34,7 @@ from plotly.subplots import make_subplots
 LATTE = {
     "base": "#eff1f5", "mantle": "#e6e9ef", "crust": "#dce0e8",
     "text": "#4c4f69", "subtext0": "#6c6f85", "surface1": "#bcc0cc",
-    "lavender": "#7287fd", "peach": "#fe640b", "teal": "#179299",
+    "lavender": "#7287fd", "peach": "#fe640b", "teal": "#179299", "overlay0": "#9ca0b0",
 }
 
 # Variant -> color (order = legend/group order)
@@ -33,20 +43,21 @@ VARIANTS = [
     ("Real engram",  LATTE["lavender"]),
     ("Randomized",   LATTE["peach"]),
     ("Uniform",      LATTE["teal"]),
+    ("MLP control",  LATTE["overlay0"]),
 ]
 
 # --- base model evaluation metrics ---
-BASE_CORE = {"MHC baseline": 0.2626, "Real engram": 0.2707, "Randomized": 0.2520, "Uniform": 0.2534}
-VALBPB    = {"MHC baseline": 0.7107, "Real engram": 0.7048, "Randomized": 0.7237, "Uniform": 0.7127}
+BASE_CORE = {"MHC baseline": 0.2626, "Real engram": 0.2707, "Randomized": 0.2520, "Uniform": 0.2534, "MLP control": 0.2767}
+VALBPB    = {"MHC baseline": 0.7107, "Real engram": 0.7048, "Randomized": 0.7237, "Uniform": 0.7127, "MLP control": 0.7170}
 
 # --- SFT / chat evaluation metrics (all higher = better) ---
 SFT = [
-    ("ChatCORE",  {"MHC baseline": 0.3765, "Real engram": 0.4095, "Randomized": 0.3853, "Uniform": 0.3946}),
-    ("ARC-E",     {"MHC baseline": 0.6494, "Real engram": 0.6970, "Randomized": 0.6768, "Uniform": 0.6928}),
-    ("ARC-C",     {"MHC baseline": 0.4957, "Real engram": 0.5631, "Randomized": 0.5265, "Uniform": 0.5316}),
-    ("MMLU",      {"MHC baseline": 0.3660, "Real engram": 0.4047, "Randomized": 0.3829, "Uniform": 0.3862}),
-    ("GSM8K",     {"MHC baseline": 0.1198, "Real engram": 0.1008, "Randomized": 0.1069, "Uniform": 0.1016}),
-    ("HumanEval", {"MHC baseline": 0.1280, "Real engram": 0.1402, "Randomized": 0.1098, "Uniform": 0.1341}),
+    ("ChatCORE",  {"MHC baseline": 0.3765, "Real engram": 0.4095, "Randomized": 0.3853, "Uniform": 0.3946, "MLP control": 0.3854}),
+    ("ARC-E",     {"MHC baseline": 0.6494, "Real engram": 0.6970, "Randomized": 0.6768, "Uniform": 0.6928, "MLP control": 0.6738}),
+    ("ARC-C",     {"MHC baseline": 0.4957, "Real engram": 0.5631, "Randomized": 0.5265, "Uniform": 0.5316, "MLP control": 0.5094}),
+    ("MMLU",      {"MHC baseline": 0.3660, "Real engram": 0.4047, "Randomized": 0.3829, "Uniform": 0.3862, "MLP control": 0.3785}),
+    ("GSM8K",     {"MHC baseline": 0.1198, "Real engram": 0.1008, "Randomized": 0.1069, "Uniform": 0.1016, "MLP control": 0.1122}),
+    ("HumanEval", {"MHC baseline": 0.1280, "Real engram": 0.1402, "Randomized": 0.1098, "Uniform": 0.1341, "MLP control": 0.1220}),
 ]
 
 fig = make_subplots(
@@ -100,7 +111,7 @@ for r, c in [(1, 1), (1, 2), (2, 1)]:
     fig.update_xaxes(row=r, col=c, color=LATTE["text"], linecolor=LATTE["surface1"], showgrid=False)
     fig.update_yaxes(row=r, col=c, color=LATTE["text"], linecolor=LATTE["surface1"],
                      gridcolor=LATTE["crust"], zeroline=False)
-fig.update_yaxes(row=1, col=1, range=[0.24, 0.285])         # zoom CORE (+ label headroom)
+fig.update_yaxes(row=1, col=1, range=[0.24, 0.292])         # zoom CORE (+ label headroom)
 fig.update_yaxes(row=1, col=2, range=[0.736, 0.684])        # val bpb INVERTED: up = lower = better
 fig.update_yaxes(row=2, col=1, range=[0, 0.80])             # SFT label headroom
 for ann in fig.layout.annotations:

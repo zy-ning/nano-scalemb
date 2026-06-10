@@ -155,8 +155,8 @@ parser.add_argument(
     "--engram-ablation-mode",
     type=str,
     default="none",
-    choices=["none", "randomize", "uniform"],
-    help="Engram payload ablation: none=trainable table, randomize=frozen Gaussian table, uniform=frozen shared vector table",
+    choices=["none", "randomize", "uniform", "mlp"],
+    help="Engram payload ablation: none=trainable table, randomize=frozen Gaussian table, uniform=frozen shared vector table, mlp=capacity/FLOP-matched control (no n-gram lookup; payload is a learned projection of the hidden state)",
 )
 parser.add_argument(
     "--engram-mhc-num-streams",

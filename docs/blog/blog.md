@@ -25,17 +25,21 @@ and more.
 The catch shows up when you fill that memory with garbage. Swap the learned table
 for frozen noise, or for a single row copied a million times, and on the chat-suite
 scores a surprising amount of the lift still survives, even though those tables hold
-nothing useful. (On the base metrics it doesn't survive, which is its own clue.) So
-something subtler is going on, and downstream scores alone can't tell you what.
+nothing useful. A capacity-matched control that deletes the table outright, keeping
+only the same extra trainable parameters in the branch, reproduces that lift too. (On
+the *base* metrics the frozen-garbage tables instead fall below baseline, while the
+trainable control does not, which is its own clue.) So something subtler is going on,
+and downstream scores alone can't tell you what.
 
-To find out we go inside the model two ways, both cheap and both CPU-only: a
+To find out we go inside the model, every probe cheap and CPU-only: a **causal read
+test** that flips a single fact inside the memory and watches the prediction move, a
 **weight probe** that reads what each checkpoint learned straight from its
 `state_dict`, and a **forward probe** that watches what the model actually does on
-real tokens. Between them they tell a two-part story. The real memory genuinely
-learns and uses an n-gram store, *and* a good chunk of the headline number is
-plumbing, not contents.
+real tokens. Together they tell a two-part story. The real memory genuinely learns
+and uses an n-gram store, reading content that is demonstrably causal, *and* a good
+chunk of the headline number is plumbing, not contents.
 
-All five figures below are interactive; hover for exact values.
+All six figures below are interactive; hover for exact values.
 
 ## What nano-scalemb is
 
@@ -79,10 +83,10 @@ In this study the memory sits at layers 2, 12, 18 (`memory_dim=1280`, 3-gram max
 8 heads per n-gram, 4 streams), emitting a per-stream contribution that the mHC
 router places into the residual streams.
 
-### The four knobs
+### The five knobs
 
-The whole investigation rests on four checkpoints that are identical in every way
-except for what's sitting in the memory table:
+The whole investigation rests on a set of checkpoints that share one backbone and
+differ only in what feeds the memory branch:
 
 | Variant | Memory table | What it isolates |
 |---|---|---|
@@ -90,29 +94,38 @@ except for what's sitting in the memory table:
 | **Real engram** | learned n-gram memory | the full method |
 | **Randomized** | frozen `N(0,1)` noise, never trained | the read/gate path with a content-free but *distinct* payload |
 | **Uniform** | every row identical | the path with no information at all |
+| **MLP control** | no table at all; payload is a learned projection of the hidden state | the routed branch's trainable *capacity*, with zero n-gram lookup |
 
 The logic is simple. If what matters is the n-gram *content*, only Real should
 help. If what matters is the *mechanism* (the extra gated compute and the extra
 routed branch), then even Randomized and Uniform should help. Keep that fork in
 mind; the rest of the post is really about which side wins.
 
+The first four differ only in the table contents; Randomized and Uniform freeze
+the table, so it never trains and adds *no trainable parameters*. The MLP control
+goes one step further and deletes the lookup entirely, replacing the payload with a
+small learned projection. That makes its trainable budget almost exactly
+Randomized's and Uniform's (~+36M over baseline, all of it the routed branch, none
+of it memory), so it answers a sharp version of the question: is the lift just extra
+trainable capacity in the branch?
+
 ## Does the memory help at all?
 
-📊 **[`ablation_sweep.html`](./ablation_sweep.html)**: base + SFT metrics, four variants.
+📊 **[`ablation_sweep.html`](./ablation_sweep.html)**: base + SFT metrics, five variants.
 
 Start with the scoreboard. The real Engram is the best variant on almost
 everything:
 
-| Metric (↑ better unless noted) | mHC baseline | **Real** | Randomized | Uniform |
-|---|---|---|---|---|
-| CORE | 0.2626 | **0.2707** | 0.2520 | 0.2534 |
-| val bpb (↓) | 0.7107 | **0.7048** | 0.7237 | 0.7127 |
-| ChatCORE | 0.3765 | **0.4095** | 0.3853 | 0.3946 |
-| ARC-Easy | 0.6494 | **0.6970** | 0.6768 | 0.6928 |
-| ARC-Challenge | 0.4957 | **0.5631** | 0.5265 | 0.5316 |
-| MMLU | 0.3660 | **0.4047** | 0.3829 | 0.3862 |
-| HumanEval | 0.1280 | **0.1402** | 0.1098 | 0.1341 |
-| GSM8K | **0.1198** | 0.1008 | 0.1069 | 0.1016 |
+| Metric (↑ better unless noted) | mHC baseline | **Real** | Randomized | Uniform | MLP control |
+|---|---|---|---|---|---|
+| CORE | 0.2626 | 0.2707 | 0.2520 | 0.2534 | **0.2767** |
+| val bpb (↓) | 0.7107 | **0.7048** | 0.7237 | 0.7127 | 0.7170 |
+| ChatCORE | 0.3765 | **0.4095** | 0.3853 | 0.3946 | 0.3854 |
+| ARC-Easy | 0.6494 | **0.6970** | 0.6768 | 0.6928 | 0.6738 |
+| ARC-Challenge | 0.4957 | **0.5631** | 0.5265 | 0.5316 | 0.5094 |
+| MMLU | 0.3660 | **0.4047** | 0.3829 | 0.3862 | 0.3785 |
+| HumanEval | 0.1280 | **0.1402** | 0.1098 | 0.1341 | 0.1220 |
+| GSM8K | **0.1198** | 0.1008 | 0.1069 | 0.1016 | 0.1122 |
 
 So far, so good: the memory earns its keep across CORE, val bpb, and the whole chat
 suite, with GSM8K the only place the baseline wins.
@@ -120,16 +133,37 @@ suite, with GSM8K the only place the baseline wins.
 Now look one column over. Uniform and Randomized hold *zero* and *no useful*
 information, and they still beat the baseline on ChatCORE (0.395 and 0.385 vs
 0.377), on ARC, on MMLU. An empty table has nothing to teach the model, yet the
-model comes out ahead anyway. (Not everywhere, though: on the base metrics both
-ablations fall *below* baseline, CORE 0.252/0.253 vs 0.263 and val bpb worse too.
-The first hint that content and pathway pull on different scores.) That's the puzzle
-that sets up the rest of the post: the scores say "memory good," but they clearly
-can't be measuring only the memory. Time to stop trusting the scoreboard and go look
-inside.
+model comes out ahead anyway on the chat suite. (Not everywhere, though: on the base
+metrics the story inverts, which we come back to in a moment.)
+
+The MLP control sharpens the suspicion into a measurement. It has the same trainable
+budget as Randomized and Uniform but no lookup whatsoever, and it lands right in
+their ChatCORE band (0.385, against 0.385 and 0.395) while clearing the baseline's
+0.377. In other words: take away the memory entirely, keep only the extra trainable
+branch, and most of the chat-suite lift over baseline survives. The chat gains the
+content-free ablations show are largely paid for by the ~+36M trainable parameters
+in the routed branch, not by anything in the table. What the real memory's content
+adds is the *further* climb from that capacity band up to 0.410, and that step costs
+a 1.6B-parameter learned table.
+
+The base metrics add a twist. There the content-free *frozen* tables hurt (CORE
+0.252/0.253 below baseline's 0.263), but the MLP control, whose payload is trainable,
+posts the best CORE of all (0.2767). A frozen junk payload acts like noise the
+backbone has to work around during pretraining; a trainable one just becomes useful
+extra compute. So "extra capacity" and "frozen content-free payload" are not the same
+intervention, and they pull the base scores in opposite directions even though they
+sit together post-SFT. (Each cell here is a single training run; the eval itself is
+deterministic, so the right caveat is run-to-run training noise, not measurement
+noise. Read the closest gaps, the MLP control's CORE lead most of all, as suggestive
+rather than settled.) That's the puzzle that sets up the rest of the post: the scores
+say "memory good," but they clearly can't be measuring only the memory. Time to stop
+trusting the scoreboard and go look inside.
 
 ```bash
-# Reproduce: train all four variants on the same backbone, then plot
+# Reproduce: train the four table variants on the same backbone...
 bash runs/run_engram_ablation_sweep_21218_mhc.sh
+# ...plus the capacity-matched, no-lookup MLP control, then plot all five
+bash runs/run_engram_mlp_control_21218_mhc.sh
 python docs/blog/plot_ablation_sweep.py
 ```
 
@@ -179,29 +213,80 @@ the target token.
 
 Here's a clean test the architecture makes easy. The Engram reads from a token
 stream (`engram_input_ids`) that's normally just the prompt. Nothing stops us from
-holding the prompt fixed and feeding the memory a *different* "donor" text (one that
-matches, one that's adversarial, one that's unrelated) and watching the target
-token's logit move. If the read is doing nothing, the logit won't budge.
+holding the prompt fixed and feeding the memory a *different* "donor" text and
+watching the target token's logit move. If the read is doing nothing, the logit
+won't budge.
 
-It budges. Across three factual-recall cases (*France → Paris*, *Gold → Au*,
-*largest planet → Jupiter*) the read is clearly live: swapping the donor moves the
-target's logit by as much as −1.4, a clear and repeatable dent, though (as the two
-invariants below show) never quite enough to close the margin to rank-2. And two
-things hold in every single case-and-donor combination:
+It budges — but the first version of this test couldn't say *why*. The original
+donor probe tiled a whole foreign document into the memory stream and measured every
+swap against the self (prompt-as-memory) baseline. That conflates two things: the
+read reacting to *content* versus merely reacting to the input *changing at all*. It
+is also doubly out-of-distribution — the memory is trained to read the model's *own*
+running context, never a tiled foreign paragraph, and the read is a position-aligned
+n-gram hash lookup, not a search that hunts the donor for the relevant fact. So a
+flat result there tells us little. Indeed, with a content-matched-vs-adversarial
+contrast the factual signal washes out (matched − adversarial ≈ +0.04 logit, barely
+above a frozen-random control) — which says more about the broken test than about
+the read.
 
-1. The change is always a *decrease*. Feeding the prompt its own memory gives the
-   highest target logit; any other donor only lowers confidence.
-2. The prediction never flips. The target token stays rank-1 in all nine
-   combinations.
+### A sharper test: flip one token, in-distribution
 
-So the read is genuinely wired in and content-sensitive, but on facts the backbone
-already knows cold it behaves as a confidence dial, not a decision-maker. Real, but
-gentle.
+📊 **[`flip_probe.html`](./flip_probe.html)**: keep the memory a real sentence,
+flip only the fact.
+
+The fix is to stop feeding the memory garbage. Hold the backbone prompt fixed at
+*"The capital of France is"*, but let the memory stream read a real, coherent
+sentence that either agrees (`self`: "…France is") or **flips the single entity
+token** (`flip`: "…Japan is"). Now the memory is exactly the kind of input it was
+trained on, the flipped token lands inside the n-gram window at the prediction
+position (the read right-aligns its stream to the backbone), and the *only* thing
+that varies is the asserted fact. The question becomes directional: does flipping
+the memory to Japan raise *Tokyo* relative to *Paris*? Writing $\ell(t \mid e)$ for
+the logit of token $t$ when the memory stream reads $e$, the signal for a case with
+home answer $a$ and flipped answer $b$ is a difference-in-differences:
+
+$$\text{signal} = \big[\ell(b \mid \text{flip}) - \ell(a \mid \text{flip})\big] - \big[\ell(b \mid \text{self}) - \ell(a \mid \text{self})\big]$$
+
+i.e. how much the flip tilts the memory's vote from the home answer toward the
+matching one, over and above the agreeing baseline. (A caveat we had to engineer
+around: the entity must be a single token at a fixed slot — many do not tokenize
+that way, so a guard rejects any pair that re-segments.)
+
+It does. Across **36 cases in five knowledge domains** (capitals, languages, chemical
+symbols, continents, planet order), the flip raises the matching answer by **+0.36
+logit on average, in the right direction 28 of 36 times**. The two content-free
+controls stay flat — *randomize* hovers at zero, and *uniform* (every memory row
+identical, so the flip is a literal no-op) is **exactly** zero everywhere, a clean
+probe floor. So the read genuinely carries factual content, in distribution.
+
+Two honest qualifications keep this from being oversold:
+
+1. **It rides on a larger surface wobble.** Any entity swap — even to a non-fact
+   filler word — jolts the logits by about the same magnitude as the real fact flip.
+   The *direction* (raising the matching answer) is fact-specific; the *magnitude*
+   is not. Controlling for that surface shift (flip vs. filler) the signal is +0.23
+   and positive 21/36 — smaller, but still well clear of the controls.
+2. **The backbone wins.** The flipped capital almost never actually overtakes the
+   home answer; the read nudges, it does not decide.
+
+The 8 reversals, dissected at the token level, *support* this rather than
+undercutting it: one is a metric artifact (the surface wobble dragging a tail-dwelling
+target down faster than the rank-1 home token), four are near-floor noise in the
+weakest domains, and only three are genuine misses — and those land exactly where
+you'd predict the memory learned little: polysemous single-character answer tokens
+(`O`, `H`) and a weakly-stored association (Greece → Athens). The read is real,
+content-directional, and subordinate to the backbone — neither a confidence dial nor
+content-blind.
 
 ```bash
-# Reproduce: swap the donor stream on the real-Engram checkpoint, then plot
+# Original donor swap (kept for comparison)
 bash runs/run_engram_donor_probe_21218.sh   # wraps scripts/engram_donor_eval.py
 python docs/blog/plot_donor_probe.py
+
+# The in-distribution token-flip probe (real + randomize + uniform), then plot
+python -m runs.gen_engram_flip_cases        # regenerate + validate the 36 cases
+bash runs/run_engram_flip_probe_all.sh      # wraps scripts/engram_flip_eval.py
+python docs/blog/plot_flip_probe.py
 ```
 
 ## What did it learn? Reading the weights
@@ -307,7 +392,10 @@ Line the evidence up and a coherent picture appears:
 
 - **Downstream:** real wins, but the information-free ablations recover much of the
   *chat-suite* lift while falling *below* baseline on the base metrics (CORE, val
-  bpb). Content and pathway pull on different scores.
+  bpb). The capacity-matched MLP control, which deletes the lookup but keeps the same
+  ~+36M trainable branch, reproduces that chat lift on its own, pinning it to the
+  routed branch's capacity rather than the table. Content and pathway pull on
+  different scores.
 - **Inside the model:** the read is live and content-sensitive (if only modulatory
   on facts already known); real grows and opens its memory while uniform shuts it
   down and randomized strains against frozen noise; and on real tokens real writes a
@@ -317,11 +405,13 @@ Both halves of the answer are true at once. The real Engram genuinely learns and
 uses an n-gram memory; that much is unambiguous from the inside (the weight and
 forward probes), and it does buy real downstream quality. At the same time, a
 meaningful slice of the headline lift is the *mechanism* rather than the *content*:
-the extra gated, routed compute branch helps even when the table is empty. The
-layer sweep keeps us honest here: don't lean too hard on the saturation as proof of
-that, since the deeper stacks are also undertrained on a step-matched budget. Either
-way, it's the inside-the-model probes that let us hold both claims together; the
-scoreboard alone would have quietly hidden the second one.
+the extra gated, routed compute branch helps even when the table is empty, or absent
+entirely. The MLP control makes that concrete by matching the ablations' trainable
+budget with no lookup at all and still clearing baseline on the chat suite. The
+layer sweep keeps us honest in the other direction: don't lean too hard on the
+saturation as proof of that, since the deeper stacks are also undertrained on a
+step-matched budget. Either way, it's the inside-the-model probes that let us hold
+both claims together; the scoreboard alone would have quietly hidden the second one.
 
 This is also where we land on the claim that started the thread, that the memory
 table is "just regularization." We think that's directionally right but too strong.

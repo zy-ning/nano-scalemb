@@ -1,0 +1,90 @@
+[
+  {
+    "name": "france_to_japan",
+    "tier": "known",
+    "prompt": "The capital of France is",
+    "home_target": " Paris",
+    "variants": [
+      {"name": "self",   "engram_prompt": "The capital of France is", "target": " Paris"},
+      {"name": "flip",   "engram_prompt": "The capital of Japan is",  "target": " Tokyo"},
+      {"name": "filler", "engram_prompt": "The capital of winter is", "target": null}
+    ]
+  },
+  {
+    "name": "japan_to_france",
+    "tier": "known",
+    "prompt": "The capital of Japan is",
+    "home_target": " Tokyo",
+    "variants": [
+      {"name": "self",   "engram_prompt": "The capital of Japan is",  "target": " Tokyo"},
+      {"name": "flip",   "engram_prompt": "The capital of France is", "target": " Paris"},
+      {"name": "filler", "engram_prompt": "The capital of music is",  "target": null}
+    ]
+  },
+  {
+    "name": "germany_to_italy",
+    "tier": "known",
+    "prompt": "The capital of Germany is",
+    "home_target": " Berlin",
+    "variants": [
+      {"name": "self",   "engram_prompt": "The capital of Germany is", "target": " Berlin"},
+      {"name": "flip",   "engram_prompt": "The capital of Italy is",   "target": " Rome"},
+      {"name": "filler", "engram_prompt": "The capital of copper is",  "target": null}
+    ]
+  },
+  {
+    "name": "italy_to_germany",
+    "tier": "known",
+    "prompt": "The capital of Italy is",
+    "home_target": " Rome",
+    "variants": [
+      {"name": "self",   "engram_prompt": "The capital of Italy is",   "target": " Rome"},
+      {"name": "flip",   "engram_prompt": "The capital of Germany is", "target": " Berlin"},
+      {"name": "filler", "engram_prompt": "The capital of tennis is",  "target": null}
+    ]
+  },
+  {
+    "name": "canada_to_greece",
+    "tier": "known",
+    "prompt": "The capital of Canada is",
+    "home_target": " Ottawa",
+    "variants": [
+      {"name": "self",   "engram_prompt": "The capital of Canada is", "target": " Ottawa"},
+      {"name": "flip",   "engram_prompt": "The capital of Greece is", "target": " Athens"},
+      {"name": "filler", "engram_prompt": "The capital of gravity is","target": null}
+    ]
+  },
+  {
+    "name": "greece_to_canada",
+    "tier": "known",
+    "prompt": "The capital of Greece is",
+    "home_target": " Athens",
+    "variants": [
+      {"name": "self",   "engram_prompt": "The capital of Greece is", "target": " Athens"},
+      {"name": "flip",   "engram_prompt": "The capital of Canada is", "target": " Ottawa"},
+      {"name": "filler", "engram_prompt": "The capital of silence is","target": null}
+    ]
+  },
+  {
+    "name": "england_to_austria",
+    "tier": "known",
+    "prompt": "The capital of England is",
+    "home_target": " London",
+    "variants": [
+      {"name": "self",   "engram_prompt": "The capital of England is", "target": " London"},
+      {"name": "flip",   "engram_prompt": "The capital of Austria is", "target": " Vienna"},
+      {"name": "filler", "engram_prompt": "The capital of pizza is",   "target": null}
+    ]
+  },
+  {
+    "name": "austria_to_england",
+    "tier": "known",
+    "prompt": "The capital of Austria is",
+    "home_target": " Vienna",
+    "variants": [
+      {"name": "self",   "engram_prompt": "The capital of Austria is", "target": " Vienna"},
+      {"name": "flip",   "engram_prompt": "The capital of England is", "target": " London"},
+      {"name": "filler", "engram_prompt": "The capital of seven is",   "target": null}
+    ]
+  }
+]

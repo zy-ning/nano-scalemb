@@ -1,22 +1,22 @@
 # nano_scalemb training report
 
-Generated: 2026-06-06 14:18:46
+Generated: 2026-06-09 06:01:41
 
 ## Environment
 
 ### Git Information
 - Branch: main
-- Commit: ea1115c (dirty)
-- Message: first commit
+- Commit: 10a6f1a (dirty)
+- Message: Update README and blog documentation; add new donor probe script and cases
 
 ### Hardware
 - Platform: Linux
 - CPUs: 96 cores (192 logical)
 - Memory: 2015.5 GB
-- GPUs: 8x NVIDIA H200
-- GPU Memory: 1118.5 GB total
+- GPUs: 4x NVIDIA H200
+- GPU Memory: 559.2 GB total
 - CUDA Version: 12.8
-- Hourly Rate: $16.00/hour
+- Hourly Rate: $8.00/hour
 
 ### Software
 - Python: 3.10.18
@@ -24,18 +24,18 @@ Generated: 2026-06-06 14:18:46
 
 
 ### Bloat
-- Characters: 543
-- Lines: 28
-- Files: 1
-- Tokens (approx): 135
+- Characters: 1,127,404
+- Lines: 18,746
+- Files: 75
+- Tokens (approx): 281,851
 - Dependencies (uv.lock lines): 3,618
 
-Run started: 2026-06-06 14:18:47
+Run started: 2026-06-09 06:01:41
 
 ---
 
 ## Base model training
-timestamp: 2026-06-06 19:25:57
+timestamp: 2026-06-09 16:29:14
 
 - run: dummy
 - device_type: 
@@ -47,7 +47,7 @@ timestamp: 2026-06-06 19:25:57
 - max_seq_len: 2048
 - window_pattern: SSSL
 - engram: True
-- engram_layers: 17
+- engram_layers: 2,12,18
 - engram_max_ngram_size: 3
 - engram_heads_per_ngram: 8
 - engram_memory_dim: 1280
@@ -56,15 +56,12 @@ timestamp: 2026-06-06 19:25:57
 - engram_no_tokenizer_compression: False
 - engram_embedding_lr_mult: 5.0000
 - engram_pad_id: 0
-- engram_seed: 56
-- engram_ablation_mode: none
-- engram_fusion_mode: mhc
+- engram_seed: 48
+- engram_ablation_mode: mlp
 - engram_mhc_num_streams: 4
-- engram_mhc_sinkhorn_iters: 20
 - mhc: True
 - mhc_num_streams: 4
 - mhc_sinkhorn_iters: 20
-- mhc_head_mode: learned
 - num_iterations: -1
 - target_flops: -1.0000
 - target_param_data_ratio: 9.5000
@@ -87,99 +84,102 @@ timestamp: 2026-06-06 19:25:57
 - core_metric_max_per_task: 500
 - sample_every: -1
 - save_every: -1
-- model_tag: nano-scalemb-d24-1layer-17-mhc-20260605-135431
-- Number of parameters: 1,951,744,804
-- Number of FLOPs per token: 5.061315e+09
-- Calculated number of iterations: 6784
-- Number of training tokens: 7,113,539,584
-- Tokens : Scaling params ratio: 9.4991
-- DDP world size: 8
+- model_tag: nano-engram-d24-mlpctrl-21218-mhc
+- Number of parameters: 1,427,407,766
+- Number of FLOPs per token: 5.204809e+09
+- Calculated number of iterations: 7001
+- Number of training tokens: 7,341,080,576
+- Tokens : Scaling params ratio: 9.5000
+- DDP world size: 4
 - warmup_ratio: 0.0000
 - warmdown_ratio: 0.5000
 - final_lr_frac: 0.0000
 - Minimum validation bpb: None
 - Final validation bpb: None
 - CORE metric estimate: None
-- MFU %: 26.69%
-- Total training flops: 3.600387e+19
-- Total training time: 285.84m
-- Peak memory usage: 97499.60MiB
+- MFU %: 26.04%
+- Total training flops: 3.820892e+19
+- Total training time: 619.21m
+- Peak memory usage: 91524.72MiB
 
 
 ## Base model evaluation
-timestamp: 2026-06-06 20:03:08
+timestamp: 2026-06-09 17:43:44
 
-- model: base_model (step 6784)
-- CORE metric: 0.2408
-- train bpb: 0.7269
-- val bpb: 0.7255
-- hellaswag_zeroshot: 0.3659
-- jeopardy: 0.0931
-- bigbench_qa_wikidata: 0.4320
-- arc_easy: 0.5741
-- arc_challenge: 0.1604
-- copa: 0.3200
-- commonsense_qa: 0.0438
-- piqa: 0.4570
+- model: base_model (step 7001)
+- CORE metric: 0.2767
+- train bpb: 0.7176
+- val bpb: 0.7170
+- hellaswag_zeroshot: 0.4029
+- jeopardy: 0.0997
+- bigbench_qa_wikidata: 0.4535
+- arc_easy: 0.5920
+- arc_challenge: 0.2048
+- copa: 0.2800
+- commonsense_qa: 0.1882
+- piqa: 0.4864
 - openbook_qa: 0.1947
-- lambada_openai: 0.4238
-- hellaswag: 0.3660
-- winograd: 0.2747
-- winogrande: 0.0908
-- bigbench_dyck_languages: 0.0870
+- lambada_openai: 0.4399
+- hellaswag: 0.4143
+- winograd: 0.3773
+- winogrande: 0.1113
+- bigbench_dyck_languages: 0.1540
 - agi_eval_lsat_ar: 0.0652
-- bigbench_cs_algorithms: 0.4159
-- bigbench_operators: 0.1619
-- bigbench_repeat_copy_logic: 0.0000
-- squad: 0.4123
-- coqa: 0.3100
-- boolq: -0.1339
-- bigbench_language_identification: 0.1827
-- sample 0: <|bos|>The capital of France is Paris, and the city of Paris is the capital of France. Paris is the
-- sample 1: <|bos|>The chemical symbol of gold is Au, which is derived from the Latin word aurum, meaning "shining
-- sample 2: <|bos|>If yesterday was Friday, then tomorrow will be Saturday. If yesterday was Saturday, then tomorrow will be Sunday. If yesterday was
+- bigbench_cs_algorithms: 0.4341
+- bigbench_operators: 0.2190
+- bigbench_repeat_copy_logic: 0.0312
+- squad: 0.4417
+- coqa: 0.3067
+- boolq: 0.0134
+- bigbench_language_identification: 0.1777
+- sample 0: <|bos|>The capital of France is Paris, and the capital of France is Paris. The capital of France is Paris
+- sample 1: <|bos|>The chemical symbol of gold is Au. The chemical symbol of gold is Au. The chemical symbol of gold is
+- sample 2: <|bos|>If yesterday was Friday, then tomorrow will be Saturday. If you're a fan of the old saying, "If it's
 - sample 3: <|bos|>The opposite of hot is cold. Cold is the opposite of hot. Cold is the opposite of hot.
 - sample 4: <|bos|>The planets of the solar system are: Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, and
-- sample 5: <|bos|>My favorite color is blue. I love blue. I love blue. I love blue. I love
-- sample 6: <|bos|>If 5*x + 3 = 13, then x is 5. If 5*x + 3 = 13, then
-- unconditioned 0: <|bos|>If the high dollar amount of cash you acquire go too far in discounting life, it may appear that what you do and keep on hold your rates to embrace inflation.
-If you swap your job to a nonprofit organization that provides jobs for low cost.
-I notice lately it seems as if government aid starts decreasing. Is it like a reduction on my income? Can I go back on the Chapter 100 bond I was purchasing for $25,000?
-As I understand it, Congress enacted a $5 billion cap on income tax with a 10% rate to protect the American pension scheme from increasing tax rates as Americans pull back
-- unconditioned 1: <|bos|>Many glasses produced in the United States are made in places such as China, China, Europe, or China. These Philippine Manufacturers are, therefore, a particularly high risk of black mould growth, as typical Philippine Aleurone screen printing moulds use a spray system; Negro Wetspun parts' use an edible ink so that molding products will not be rinsed away during food preparation. Some companies claim their production line can grow mold quickly due to some equipment being exposed to weather or humidity. Other ingredients such as soap can cause it too, but it is usually thicker and can sometimes be harder to spot and mold it will
-- unconditioned 2: <|bos|>Your description isn't very accurate. Even when I guess this about the color of a region it is not "the most common rich that we see". Whitish regions are less common than white regions. If you think it is, you wouldn't have three most common rich colors rather than six rich colors.
-Distortion is really that big of a deal, compared to brightness variation. Bright to dark by pixel shift is going to appear different based on how far each depth buffer is from the light compared to how far it is relative to the color buffer (same pixel). Colors aren't just different brightness, they are also different amounts of yellow.
+- sample 5: <|bos|>My favorite color is blue. I love the color blue. I love the color blue. I love
+- sample 6: <|bos|>If 5*x + 3 = 13, then x is a factor of 5. If 5*x + 3 = 
+- unconditioned 0: <|bos|>If the high dollar cap market is going to go too high in a recession setting, investors may see their gains flattened. Outside of accounting, the rates to which inflation increases would have no significant effect on the money supply ri...nide | how to solve the lazy boy's problem solution | problems in technology-money relations | daily blog | big data | exorcismal worries in math | how is box score computed | ltlathunk | how does public memory work | topology | creating trust in out of network storage issues | systemic outsourcing to low cost manufacturing pgrilam
+- unconditioned 1: <|bos|>Many glasses produced in the United States according to the glasses manufacturer's own specifications are not FDA suitable, and some don't meet the standards, therefore they may be potentially dangerous to the user.
+
+In our country, the European Union and many other countries, international standardization conditions need to be carefully regulated. The parts of laser glasses and their wear resistance and performance requirements are analyzed, compared, checked and approved by EAS. Among them, Light Skin Stronger than Glassware -GLASS-SHADED GLASS from Reg643 can be tested by TGA real-time inspection to ensure the FDA safety and efficacy of FDA certified products.
+
+
+- unconditioned 2: <|bos|>Your description isn't very clear. Perhaps you are thinking of a few different types of woodworking projects? If so, you are getting that very clearly. Woodworkers take a variety of different forms when they design, cut and finish a woodworking project. While most craftspeople are capable of making precise and sometimes artistic cuts in most wood types, the skills required of a woodworker are often to do with building something with your own hands that people will be using day to day. People will spend a lot of time with a piece, getting to know it, make it feel like home and use it in the things that make their lives better.
 
 - unconditioned 3: <|bos|>Model,
-On 15 March 1967 the Act was first passed in the United States demanding that the Commission set up one international Commission on teaching English-language literature (TED L), the second in the World. February 1, 1967 saw the commission break down into two "reports" issued by that Commission. One of the reports and the 30 Agreements, introduced by ENRON President, Jean Enso, was produced in a medical journal article. It stated, ""There is no textbook for English culture. It awards the student time to be intelligent, wisdomful and competitive.
-The Act caused a
-- unconditioned 4: <|bos|>Dive into the rich and savory land of Hunza National Park, where the convergence of extreme weather and swift mountain footsteps has come to define the desert biome.
-With its Rolls Royce, India has earned the title of the most environmentally friendly nation in the world. India’s designation of Clean Air Zones (CAZ) has elevated the Status of the Air.
-Orchids and buttery collards make their presence known in the annual Draba traditional festival, called weta in Kurnool district, Rajasthan, India. What’s more is that the dairy and art caring regions of Jaipur and Nairob
-- unconditioned 5: <|bos|>These species are commonly known as "cape," yet to be an effect, mine involves a filling and clipping around the eyes, these eyes are "matted" to a pink behind because the head is so large compared to body. Further, when the bath salt strips an imprint of this head, it goes blurry and...doesn't show up as a pink against the stray light.
-@ Catriona
-No, these are not the same as "cape" except that mine involved some scalpel along the body, which will never acquire a fancy dress outfit, (maybe we could reskin Sean, after Heaven's Hollow
-- unconditioned 6: <|bos|>How bonsai trees grow and live
+VL (Mean Line Error) is used to explain the variation in prediction accuracy with respect to predictors. For example, a regression model predicting a column mean in a data set with a low VL score will do badly when predicted values are meant to be within a certain range. A higher VL score means the program is presumably better and thus the data set is most likely predictive (Simon, 2022).
+Another important difference between Standard Error and Mean Error is regarding 3 SE (Standard Error of the SSE sum of squared differences). In order to be confident, one needs to compare the predicted value using the
+- unconditioned 4: <|bos|>Dive into the rich and savory world of Hunan Chicken and Goong Tea, a classic dish that embodies the essence of Thai hospitality. This dish, originating from the ancient province of Hubei, showcases the intricate balance of flavors and textures that define the culinary heritage of northern Thailand.
+Hailing from the historic Taliampang, the capital city of Wat Sai, historians claim that this dish dates back to the Nomadic tribes that once roamed the region. Yet the secrets of this dish have eluded Thai scholars for centuries, mainly due to its imperial roots.
+The name "Goong Tea" likely derives from the
+- unconditioned 5: <|bos|>These species are commonly known as sympatric or insular species. This means that the species lives close to the places where their mating and offspring can proceed. This provides a greater chance for the species' survival and conservation advantages.
+True sympatric species
+This means that an individual of this species lives in the extreme vicinity of other individuals of that species. Wolf and deer species are examples of well-known sympatric species
+Sometimes these species caninterbreed and produce offsprings with similar features and traits. This leads to new species casting further differences following the confrontation of existing features.
+Biological Intermixing:
+When sympatric species are
+- unconditioned 6: <|bos|>How bonsai is not a sacred object
 
-Bonsai are one of the oldest forms of decorative art. Their history goes back to the Roman Empire, which enjoyed the practice of having dwarf trees on their homes as ornamental objects. Bonsai are also found to be native to Japan.
+Recently the subject of bonsai by God- shown asceticss has now grown additional attention and attention.
 
-Here are the most common flowers explained
+The history of bonsai
 
-Some of the most common flowers are members of the primrose family called primrodiam and are known for their colourful flowers. There are also members of the sunflower family, which have a yellow coloured flower and look very similar to a sunflower yet is a member of the Primrose family of flowers.
+Must be known: Pacifice bonsai appeared relatively recently. The appearance of trees in trees in such a way that even flowers could not what is known as means-directed ninety consists of some things that were known before leaves and stoneware evil to Brewster's identity. In appearance,eyes,clean,harmless, and use of the trop's imagery will not justify the appearance of "higher" goods or in any way deny that. Therefore
+- unconditioned 7: <|bos|>point far. Most hunters use the bow down bow stick to bring back
+animal. Only one may touch them while walking into the field at a
+break, he/she uses the slip lead sling to haul an animal and a choke
+point breast hook if needed. Bow hunting was 13 and stalking (also known
+as wilderness living) was 12.
 
-When we say primrodiam these
-- unconditioned 7: <|bos|>pointing. Most hunters use the bow downwind from their target area in a mostly
-dry hole or no cover. You must hide the ball well downwind and position the bow so
-that your target is a comfortable, averaged distance from you, depending on if you
-are hunting downwind from the stag or upwind around them.
-Know the depths in a hunting hole. Freshwater is safer, but wind
-changes can make a wet hole 13 to 14 feet deep or more in the summer (and more
-for wind speed) with the potential of deviating more later. Before meandering into
-the
+1. Portions of the brain are divided into lobes. The frontal lobe
+controls the following functions of a human, and is largest of the two
+lobes therefore figuring that the frontal lobe is the more highly
+productive area of the brain which
 
 
 ## Chat evaluation sft
-timestamp: 2026-06-06 22:32:46
+timestamp: 2026-06-09 22:20:44
 
 - source: sft
 - task_name: None
@@ -189,37 +189,37 @@ timestamp: 2026-06-06 22:32:46
 - num_samples: 1
 - top_k: 50
 - batch_size: 8
-- model_tag: nano-scalemb-d24-1layer-17-mhc-20260605-135431
+- model_tag: nano-engram-d24-mlpctrl-21218-mhc
 - step: None
 - max_problems: None
 - device_type: 
 - dist_timeout_minutes: 120.0000
 - audit_dir: 
-- ARC-Easy: 0.6692
-- ARC-Challenge: 0.5239
-- MMLU: 0.3813
-- GSM8K: 0.0804
-- HumanEval: 0.0976
+- ARC-Easy: 0.6738
+- ARC-Challenge: 0.5094
+- MMLU: 0.3785
+- GSM8K: 0.1122
+- HumanEval: 0.1220
 - SpellingBee: 0.9961
-- ChatCORE metric: 0.3789
+- ChatCORE metric: 0.3854
 
 
 ## Summary
 
-- Characters: 543
-- Lines: 28
-- Files: 1
-- Tokens (approx): 135
+- Characters: 1,127,404
+- Lines: 18,746
+- Files: 75
+- Tokens (approx): 281,851
 - Dependencies (uv.lock lines): 3,618
 
 | Metric          | BASE     | SFT      | RL       |
 |-----------------|----------|----------|----------|
-| CORE            | 0.2408   | -        | -        |
-| ARC-Challenge   | -        | 0.5239   | -        |
-| ARC-Easy        | -        | 0.6692   | -        |
-| GSM8K           | -        | 0.0804   | -        |
-| HumanEval       | -        | 0.0976   | -        |
-| MMLU            | -        | 0.3813   | -        |
-| ChatCORE        | -        | 0.3789   | -        |
+| CORE            | 0.2767   | -        | -        |
+| ARC-Challenge   | -        | 0.5094   | -        |
+| ARC-Easy        | -        | 0.6738   | -        |
+| GSM8K           | -        | 0.1122   | -        |
+| HumanEval       | -        | 0.1220   | -        |
+| MMLU            | -        | 0.3785   | -        |
+| ChatCORE        | -        | 0.3854   | -        |
 
-Total wall clock time: 8h13m
+Total wall clock time: 16h19m

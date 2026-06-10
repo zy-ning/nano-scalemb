@@ -571,12 +571,24 @@ class Engram(nn.Module):
         )
         head_dim = cfg.memory_dim // num_heads
 
-        self.multi_head_embedding = MultiHeadEmbedding(
-            list_of_N=head_vocab_sizes,
-            D=head_dim,
-        )
-
         engram_hidden_size = cfg.memory_dim  # = num_heads * head_dim
+
+        # ablation_mode="mlp" is the capacity / FLOP-matched control: it keeps the
+        # full Engram branch machinery (value_proj, gate, short conv, mHC routing)
+        # but removes all n-gram addressing. The payload is a learned projection of
+        # the hidden state instead of a memory lookup, so there is no memory table
+        # at all. Comparing it to real (content+addressing) and randomize/uniform
+        # (addressing only) isolates how much of the lift is just the added gated
+        # branch capacity vs the n-gram lookup itself.
+        self.is_mlp_control = cfg.ablation_mode == "mlp"
+        if self.is_mlp_control:
+            self.multi_head_embedding = None
+            self.payload_proj = nn.Linear(d_model, engram_hidden_size, bias=False)
+        else:
+            self.multi_head_embedding = MultiHeadEmbedding(
+                list_of_N=head_vocab_sizes,
+                D=head_dim,
+            )
 
         # --- Shared projection + output conv (both paths) ---
         self.value_proj = nn.Linear(engram_hidden_size, d_model, bias=False)
@@ -689,10 +701,13 @@ class Engram(nn.Module):
             "Engram.forward is the dense (no-mHC) path; with backbone mHC use "
             "forward_mhc_branches()"
         )
-        embeddings = self._compute_embeddings(
-            input_ids, compressed_input_ids=compressed_input_ids
-        )
-        embeddings = self._align_embeddings_to_hidden(x, embeddings)
+        if self.is_mlp_control:
+            embeddings = self.payload_proj(x)
+        else:
+            embeddings = self._compute_embeddings(
+                input_ids, compressed_input_ids=compressed_input_ids
+            )
+            embeddings = self._align_embeddings_to_hidden(x, embeddings)
         return self._dense_forward(x, embeddings)
 
     def forward_mhc_branches(
@@ -710,10 +725,13 @@ class Engram(nn.Module):
         assert self.backbone_mhc, (
             "forward_mhc_branches is only valid with backbone mHC enabled"
         )
-        embeddings = self._compute_embeddings(
-            input_ids, compressed_input_ids=compressed_input_ids
-        )
-        embeddings = self._align_embeddings_to_hidden(x, embeddings)
+        if self.is_mlp_control:
+            embeddings = self.payload_proj(x)
+        else:
+            embeddings = self._compute_embeddings(
+                input_ids, compressed_input_ids=compressed_input_ids
+            )
+            embeddings = self._align_embeddings_to_hidden(x, embeddings)
         gated = self._mhc_gated_values(x, embeddings)
         return self._short_conv_streams(gated)
 
@@ -723,25 +741,31 @@ class Engram(nn.Module):
 
     def init_weights(self) -> None:
         init_bound = math.sqrt(3.0) * (self.d_model**-0.5)
-        embedding_weight = self.multi_head_embedding.embedding.weight
-        ablation_mode = self.cfg.ablation_mode
-        if ablation_mode == "none":
-            nn.init.normal_(embedding_weight, mean=0.0, std=1.0)
-            embedding_weight.requires_grad_(True)
-        elif ablation_mode == "randomize":
-            nn.init.normal_(embedding_weight, mean=0.0, std=1.0)
-            embedding_weight.requires_grad_(False)
-        elif ablation_mode == "uniform":
-            shared_row = torch.empty(
-                embedding_weight.shape[1],
-                device=embedding_weight.device,
-                dtype=embedding_weight.dtype,
-            )
-            nn.init.normal_(shared_row, mean=0.0, std=1.0)
-            embedding_weight.copy_(shared_row.unsqueeze(0).expand_as(embedding_weight))
-            embedding_weight.requires_grad_(False)
+        if self.is_mlp_control:
+            # Capacity-only control: learned hidden-state projection, no table.
+            nn.init.uniform_(self.payload_proj.weight, -init_bound, init_bound)
         else:
-            raise ValueError(f"Unknown Engram ablation_mode={ablation_mode!r}")
+            embedding_weight = self.multi_head_embedding.embedding.weight
+            ablation_mode = self.cfg.ablation_mode
+            if ablation_mode == "none":
+                nn.init.normal_(embedding_weight, mean=0.0, std=1.0)
+                embedding_weight.requires_grad_(True)
+            elif ablation_mode == "randomize":
+                nn.init.normal_(embedding_weight, mean=0.0, std=1.0)
+                embedding_weight.requires_grad_(False)
+            elif ablation_mode == "uniform":
+                shared_row = torch.empty(
+                    embedding_weight.shape[1],
+                    device=embedding_weight.device,
+                    dtype=embedding_weight.dtype,
+                )
+                nn.init.normal_(shared_row, mean=0.0, std=1.0)
+                embedding_weight.copy_(
+                    shared_row.unsqueeze(0).expand_as(embedding_weight)
+                )
+                embedding_weight.requires_grad_(False)
+            else:
+                raise ValueError(f"Unknown Engram ablation_mode={ablation_mode!r}")
         nn.init.zeros_(self.value_proj.weight)
         nn.init.ones_(self.short_conv.norm.weight)
         nn.init.zeros_(self.short_conv.conv.weight)

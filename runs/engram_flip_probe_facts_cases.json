@@ -1,0 +1,830 @@
+[
+  {
+    "name": "capital__france_to_japan",
+    "tier": "capital",
+    "prompt": "The capital of France is",
+    "home_target": " Paris",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The capital of France is",
+        "target": " Paris"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The capital of Japan is",
+        "target": " Tokyo"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The capital of winter is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "capital__japan_to_france",
+    "tier": "capital",
+    "prompt": "The capital of Japan is",
+    "home_target": " Tokyo",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The capital of Japan is",
+        "target": " Tokyo"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The capital of France is",
+        "target": " Paris"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The capital of music is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "capital__germany_to_italy",
+    "tier": "capital",
+    "prompt": "The capital of Germany is",
+    "home_target": " Berlin",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The capital of Germany is",
+        "target": " Berlin"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The capital of Italy is",
+        "target": " Rome"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The capital of copper is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "capital__italy_to_germany",
+    "tier": "capital",
+    "prompt": "The capital of Italy is",
+    "home_target": " Rome",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The capital of Italy is",
+        "target": " Rome"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The capital of Germany is",
+        "target": " Berlin"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The capital of tennis is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "capital__canada_to_greece",
+    "tier": "capital",
+    "prompt": "The capital of Canada is",
+    "home_target": " Ottawa",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The capital of Canada is",
+        "target": " Ottawa"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The capital of Greece is",
+        "target": " Athens"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The capital of winter is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "capital__greece_to_canada",
+    "tier": "capital",
+    "prompt": "The capital of Greece is",
+    "home_target": " Athens",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The capital of Greece is",
+        "target": " Athens"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The capital of Canada is",
+        "target": " Ottawa"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The capital of music is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "capital__england_to_austria",
+    "tier": "capital",
+    "prompt": "The capital of England is",
+    "home_target": " London",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The capital of England is",
+        "target": " London"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The capital of Austria is",
+        "target": " Vienna"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The capital of copper is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "capital__austria_to_england",
+    "tier": "capital",
+    "prompt": "The capital of Austria is",
+    "home_target": " Vienna",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The capital of Austria is",
+        "target": " Vienna"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The capital of England is",
+        "target": " London"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The capital of tennis is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "language__france_to_japan",
+    "tier": "language",
+    "prompt": "The official language of France is",
+    "home_target": " French",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The official language of France is",
+        "target": " French"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The official language of Japan is",
+        "target": " Japanese"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The official language of winter is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "language__japan_to_france",
+    "tier": "language",
+    "prompt": "The official language of Japan is",
+    "home_target": " Japanese",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The official language of Japan is",
+        "target": " Japanese"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The official language of France is",
+        "target": " French"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The official language of gravity is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "language__germany_to_italy",
+    "tier": "language",
+    "prompt": "The official language of Germany is",
+    "home_target": " German",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The official language of Germany is",
+        "target": " German"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The official language of Italy is",
+        "target": " Italian"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The official language of silence is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "language__italy_to_germany",
+    "tier": "language",
+    "prompt": "The official language of Italy is",
+    "home_target": " Italian",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The official language of Italy is",
+        "target": " Italian"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The official language of Germany is",
+        "target": " German"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The official language of pizza is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "language__russia_to_china",
+    "tier": "language",
+    "prompt": "The official language of Russia is",
+    "home_target": " Russian",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The official language of Russia is",
+        "target": " Russian"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The official language of China is",
+        "target": " Chinese"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The official language of winter is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "language__china_to_russia",
+    "tier": "language",
+    "prompt": "The official language of China is",
+    "home_target": " Chinese",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The official language of China is",
+        "target": " Chinese"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The official language of Russia is",
+        "target": " Russian"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The official language of gravity is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "language__spain_to_poland",
+    "tier": "language",
+    "prompt": "The official language of Spain is",
+    "home_target": " Spanish",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The official language of Spain is",
+        "target": " Spanish"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The official language of Poland is",
+        "target": " Polish"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The official language of silence is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "language__poland_to_spain",
+    "tier": "language",
+    "prompt": "The official language of Poland is",
+    "home_target": " Polish",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The official language of Poland is",
+        "target": " Polish"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The official language of Spain is",
+        "target": " Spanish"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The official language of pizza is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "element__gold_to_iron",
+    "tier": "element",
+    "prompt": "The chemical symbol for gold is",
+    "home_target": " Au",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The chemical symbol for gold is",
+        "target": " Au"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The chemical symbol for iron is",
+        "target": " Fe"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The chemical symbol for winter is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "element__iron_to_gold",
+    "tier": "element",
+    "prompt": "The chemical symbol for iron is",
+    "home_target": " Fe",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The chemical symbol for iron is",
+        "target": " Fe"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The chemical symbol for gold is",
+        "target": " Au"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The chemical symbol for music is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "element__oxygen_to_hydrogen",
+    "tier": "element",
+    "prompt": "The chemical symbol for oxygen is",
+    "home_target": " O",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The chemical symbol for oxygen is",
+        "target": " O"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The chemical symbol for hydrogen is",
+        "target": " H"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The chemical symbol for summer is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "element__hydrogen_to_oxygen",
+    "tier": "element",
+    "prompt": "The chemical symbol for hydrogen is",
+    "home_target": " H",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The chemical symbol for hydrogen is",
+        "target": " H"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The chemical symbol for oxygen is",
+        "target": " O"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The chemical symbol for tennis is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "element__sodium_to_carbon",
+    "tier": "element",
+    "prompt": "The chemical symbol for sodium is",
+    "home_target": " Na",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The chemical symbol for sodium is",
+        "target": " Na"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The chemical symbol for carbon is",
+        "target": " C"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The chemical symbol for winter is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "element__carbon_to_sodium",
+    "tier": "element",
+    "prompt": "The chemical symbol for carbon is",
+    "home_target": " C",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The chemical symbol for carbon is",
+        "target": " C"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The chemical symbol for sodium is",
+        "target": " Na"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The chemical symbol for music is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "element__silver_to_helium",
+    "tier": "element",
+    "prompt": "The chemical symbol for silver is",
+    "home_target": " Ag",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The chemical symbol for silver is",
+        "target": " Ag"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The chemical symbol for helium is",
+        "target": " He"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The chemical symbol for summer is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "element__helium_to_silver",
+    "tier": "element",
+    "prompt": "The chemical symbol for helium is",
+    "home_target": " He",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The chemical symbol for helium is",
+        "target": " He"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The chemical symbol for silver is",
+        "target": " Ag"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The chemical symbol for tennis is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "continent__egypt_to_japan",
+    "tier": "continent",
+    "prompt": "The continent that contains Egypt is",
+    "home_target": " Africa",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The continent that contains Egypt is",
+        "target": " Africa"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The continent that contains Japan is",
+        "target": " Asia"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The continent that contains winter is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "continent__japan_to_egypt",
+    "tier": "continent",
+    "prompt": "The continent that contains Japan is",
+    "home_target": " Asia",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The continent that contains Japan is",
+        "target": " Asia"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The continent that contains Egypt is",
+        "target": " Africa"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The continent that contains music is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "continent__france_to_china",
+    "tier": "continent",
+    "prompt": "The continent that contains France is",
+    "home_target": " Europe",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The continent that contains France is",
+        "target": " Europe"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The continent that contains China is",
+        "target": " Asia"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The continent that contains copper is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "continent__china_to_france",
+    "tier": "continent",
+    "prompt": "The continent that contains China is",
+    "home_target": " Asia",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The continent that contains China is",
+        "target": " Asia"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The continent that contains France is",
+        "target": " Europe"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The continent that contains silence is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "continent__germany_to_kenya",
+    "tier": "continent",
+    "prompt": "The continent that contains Germany is",
+    "home_target": " Europe",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The continent that contains Germany is",
+        "target": " Europe"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The continent that contains Kenya is",
+        "target": " Africa"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The continent that contains winter is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "continent__kenya_to_germany",
+    "tier": "continent",
+    "prompt": "The continent that contains Kenya is",
+    "home_target": " Africa",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The continent that contains Kenya is",
+        "target": " Africa"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The continent that contains Germany is",
+        "target": " Europe"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The continent that contains music is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "continent__india_to_spain",
+    "tier": "continent",
+    "prompt": "The continent that contains India is",
+    "home_target": " Asia",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The continent that contains India is",
+        "target": " Asia"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The continent that contains Spain is",
+        "target": " Europe"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The continent that contains copper is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "continent__spain_to_india",
+    "tier": "continent",
+    "prompt": "The continent that contains Spain is",
+    "home_target": " Europe",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "The continent that contains Spain is",
+        "target": " Europe"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "The continent that contains India is",
+        "target": " Asia"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "The continent that contains silence is",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "planet__mercury_to_venus",
+    "tier": "planet",
+    "prompt": "In the solar system, the planet Mercury is the",
+    "home_target": " first",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "In the solar system, the planet Mercury is the",
+        "target": " first"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "In the solar system, the planet Venus is the",
+        "target": " second"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "In the solar system, the planet winter is the",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "planet__venus_to_mercury",
+    "tier": "planet",
+    "prompt": "In the solar system, the planet Venus is the",
+    "home_target": " second",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "In the solar system, the planet Venus is the",
+        "target": " second"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "In the solar system, the planet Mercury is the",
+        "target": " first"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "In the solar system, the planet music is the",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "planet__earth_to_mars",
+    "tier": "planet",
+    "prompt": "In the solar system, the planet Earth is the",
+    "home_target": " third",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "In the solar system, the planet Earth is the",
+        "target": " third"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "In the solar system, the planet Mars is the",
+        "target": " fourth"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "In the solar system, the planet copper is the",
+        "target": null
+      }
+    ]
+  },
+  {
+    "name": "planet__mars_to_earth",
+    "tier": "planet",
+    "prompt": "In the solar system, the planet Mars is the",
+    "home_target": " fourth",
+    "variants": [
+      {
+        "name": "self",
+        "engram_prompt": "In the solar system, the planet Mars is the",
+        "target": " fourth"
+      },
+      {
+        "name": "flip",
+        "engram_prompt": "In the solar system, the planet Earth is the",
+        "target": " third"
+      },
+      {
+        "name": "filler",
+        "engram_prompt": "In the solar system, the planet summer is the",
+        "target": null
+      }
+    ]
+  }
+]

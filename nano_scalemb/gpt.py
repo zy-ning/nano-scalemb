@@ -530,6 +530,7 @@ class GPT(nn.Module):
         return [
             p
             for engram in self.engram_modules.values()
+            if engram.multi_head_embedding is not None
             for p in engram.multi_head_embedding.embedding.parameters()
             if p.requires_grad
         ]
@@ -540,6 +541,7 @@ class GPT(nn.Module):
         return [
             p
             for engram in self.engram_modules.values()
+            if engram.multi_head_embedding is not None
             for p in engram.multi_head_embedding.embedding.parameters()
         ]
 
