@@ -226,9 +226,28 @@ def analyze_engram_layer(sd, lid: int, sinkhorn_iters: int) -> Dict:
     out["local_mhc_path_active"] = bool(local_drift > 1e-6)
     out["local_mhc_drift"] = local_drift
 
+    # Under EngramConfig.share_memory there is one table for all layers, stored
+    # once at the top level, so every layer reports stats for that same table.
     emb = sd.get(p + "multi_head_embedding.embedding.weight")
+    shared_emb = sd.get("engram_shared_memory.embedding.weight")
+    if emb is None and shared_emb is not None:
+        emb = shared_emb
+        out["shared_memory"] = True
     if emb is not None:
         out["embedding"] = embedding_stats(emb)
+
+    # With EngramConfig.value_rank > 0 a row is a rank-k map, not a constant, so
+    # there is no `embedding` table at all. Report the output factor, which plays
+    # the same role (it is what the read is a combination of).
+    for key, label in (
+        (p + "multi_head_embedding.w_out.weight", False),
+        ("engram_shared_memory.w_out.weight", True),
+    ):
+        if (w_out := sd.get(key)) is not None:
+            out["value_rank_w_out"] = embedding_stats(w_out)
+            if label:
+                out["shared_memory"] = True
+            break
 
     return out
 

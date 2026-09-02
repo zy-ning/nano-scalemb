@@ -106,9 +106,32 @@ ENGRAM_SEED="${ENGRAM_SEED:-42}"
 ENGRAM_ABLATION_MODE="${ENGRAM_ABLATION_MODE:-none}"
 ENGRAM_MHC_NUM_STREAMS="${ENGRAM_MHC_NUM_STREAMS:-4}"
 ENGRAM_ENABLED="${ENGRAM_ENABLED:-1}"
+ENGRAM_SHARE_MEMORY="${ENGRAM_SHARE_MEMORY:-0}"
 MHC_ENABLED="${MHC_ENABLED:-0}"
 MHC_NUM_STREAMS="${MHC_NUM_STREAMS:-4}"
 MHC_SINKHORN_ITERS="${MHC_SINKHORN_ITERS:-20}"
+
+# MoE / Mobius. MOE_SHARE_BLOCKS=0 is the per-layer MoE baseline; >0 is Mobius
+# (that many routed pools shared across depth).
+MOE_ENABLED="${MOE_ENABLED:-0}"
+MOE_EXPERTS="${MOE_EXPERTS:-8}"
+MOE_TOP_K="${MOE_TOP_K:-2}"
+MOE_D_FF_EXPERT="${MOE_D_FF_EXPERT:-256}"
+MOE_EVERY="${MOE_EVERY:-2}"
+MOE_SHARE_BLOCKS="${MOE_SHARE_BLOCKS:-0}"
+MOE_SHARED_D_FF="${MOE_SHARED_D_FF:-0}"
+MOE_ACTIVATION="${MOE_ACTIVATION:-gelu}"
+MOE_GATE="${MOE_GATE:-sigmoid}"
+MOE_BALANCER="${MOE_BALANCER:-loss_free}"
+MOE_BALANCER_KWARGS="${MOE_BALANCER_KWARGS:-}"
+MOE_BACKEND="${MOE_BACKEND:-scattermoe}"
+MOE_EXPERT_LR="${MOE_EXPERT_LR:-0.004}"
+MOE_LOG_EVERY="${MOE_LOG_EVERY:-100}"
+# Scaling-ladder knobs; MOE_GRANULARITY > 0 overrides the explicit sizes above.
+MOE_GRANULARITY="${MOE_GRANULARITY:-0}"
+MOE_EXPANSION="${MOE_EXPANSION:-8}"
+MOE_ACTIVE_MULT="${MOE_ACTIVE_MULT:-1}"
+MOE_FF_MULT="${MOE_FF_MULT:-4}"
 
 BASE_TRAIN_EXTRA_ARGS="${BASE_TRAIN_EXTRA_ARGS:---fp8 --eval-every=-1 --core-metric-every=-1 --sample-every=-1 --save-every=-1 --window-pattern=L}"
 BASE_EVAL_ARGS="${BASE_EVAL_ARGS:---eval=core,bpb,sample}"
@@ -146,6 +169,19 @@ archive_provenance() {
         echo "mhc_sinkhorn_iters=$MHC_SINKHORN_ITERS"
         echo "engram_enabled=$ENGRAM_ENABLED"
         echo "engram_ablation_mode=$ENGRAM_ABLATION_MODE"
+        echo "engram_share_memory=$ENGRAM_SHARE_MEMORY"
+        echo "moe_enabled=$MOE_ENABLED"
+        echo "moe_share_blocks=$MOE_SHARE_BLOCKS"
+        echo "moe_experts=$MOE_EXPERTS"
+        echo "moe_top_k=$MOE_TOP_K"
+        echo "moe_d_ff_expert=$MOE_D_FF_EXPERT"
+        echo "moe_every=$MOE_EVERY"
+        echo "moe_shared_d_ff=$MOE_SHARED_D_FF"
+        echo "moe_balancer=$MOE_BALANCER"
+        echo "moe_backend=$MOE_BACKEND"
+        echo "moe_granularity=$MOE_GRANULARITY"
+        echo "moe_expansion=$MOE_EXPANSION"
+        echo "moe_active_mult=$MOE_ACTIVE_MULT"
     } > "$provenance_dir/run-env.txt"
 
     git rev-parse HEAD > "$provenance_dir/git-head.txt" 2>&1 || true
@@ -193,6 +229,9 @@ if [ "$ENGRAM_ENABLED" = "1" ]; then
         --engram-ablation-mode="$ENGRAM_ABLATION_MODE"
         --engram-mhc-num-streams="$ENGRAM_MHC_NUM_STREAMS"
     )
+    if [ "$ENGRAM_SHARE_MEMORY" = "1" ]; then
+        BASE_TRAIN_CMD+=( --engram-share-memory )
+    fi
 fi
 
 if [ "$MHC_ENABLED" = "1" ]; then
@@ -201,6 +240,31 @@ if [ "$MHC_ENABLED" = "1" ]; then
         --mhc-num-streams="$MHC_NUM_STREAMS"
         --mhc-sinkhorn-iters="$MHC_SINKHORN_ITERS"
     )
+fi
+
+if [ "$MOE_ENABLED" = "1" ]; then
+    BASE_TRAIN_CMD+=(
+        --moe
+        --moe-experts="$MOE_EXPERTS"
+        --moe-top-k="$MOE_TOP_K"
+        --moe-d-ff-expert="$MOE_D_FF_EXPERT"
+        --moe-every="$MOE_EVERY"
+        --moe-share-blocks="$MOE_SHARE_BLOCKS"
+        --moe-shared-d-ff="$MOE_SHARED_D_FF"
+        --moe-activation="$MOE_ACTIVATION"
+        --moe-gate="$MOE_GATE"
+        --moe-balancer="$MOE_BALANCER"
+        --moe-backend="$MOE_BACKEND"
+        --moe-expert-lr="$MOE_EXPERT_LR"
+        --moe-log-every="$MOE_LOG_EVERY"
+        --moe-granularity="$MOE_GRANULARITY"
+        --moe-expansion="$MOE_EXPANSION"
+        --moe-active-mult="$MOE_ACTIVE_MULT"
+        --moe-ff-mult="$MOE_FF_MULT"
+    )
+    if [ -n "$MOE_BALANCER_KWARGS" ]; then
+        BASE_TRAIN_CMD+=( --moe-balancer-kwargs="$MOE_BALANCER_KWARGS" )
+    fi
 fi
 
 # shellcheck disable=SC2206

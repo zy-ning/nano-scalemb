@@ -9,6 +9,55 @@ read top-to-bottom and modify without fighting a framework.
 > investigation (ablations → layer sweep → causal donor probe → two-tier
 > interpretability probes), with interactive figures.
 
+> 📊 **中文报告 / Chinese report:**
+> [`docs/条件容量研究报告.md`](docs/条件容量研究报告.md) — 同一批实验，按**结论**而非
+> 按轮次组织：四个成立的结论、按想法类别归类的排除项、站得住的机制解释、以及全部
+> 工程陷阱。适合先读这一份。
+
+> 📊 **Conditional-capacity study (d20):**
+> [`docs/conditional_capacity_study.md`](docs/conditional_capacity_study.md) —
+> 82 runs at matched active params comparing MoE, Mobius, Engram and continuous
+> (hidden-state-addressed) Engram. Headlines: cross-layer memory *sharing* is the
+> largest single effect, and hidden-state addressing is a *supplement* rather than
+> a substitute for token addressing. Includes measured seed error bars, the
+> retractions they forced, and a §8 reinterpretation through
+> [*MLPs are Hebbians*](https://arxiv.org/abs/2607.10034) — under which the study's
+> largest unremarked effect is *constant-valued* vs *function-valued* memory, not
+> the address source — **which rounds 5-6 then refuted**, measuring the rank axis
+> at 0.02-0.09× its error bar and *harmful* on the best arm. §9 has the account
+> that survives: all the value is in whether the *address* carries information the
+> residual stream discarded, address capacity is worth 0.00195 per doubling of
+> rows, and row-content expressiveness is worth nothing — confirmed twice more in
+> rounds 7-9, where both a learned k/v split and rank-k values came out exactly
+> neutral once their row cost is subtracted. **Rounds 10-12 then pruned the
+> survivors**: the count gate is unresolved at 1.94× pooled, and cross-layer
+> sharing turns out *not* to be a capacity effect at all — at matched rows-per-read
+> it still wins 0.0037 while using 67% of the storage. **Rounds 12-13** then found
+> the one mechanism that does resolve — a *decoupled* count gate at −0.00106
+> (3.43×), which won by halving variance rather than moving the mean — and narrowed
+> sharing to plain *pooling*: one table multiplexed across layers beats two private
+> tables of the same per-layer size, at half the parameters, with no per-n-gram row
+> correspondence. A fully iso 2×2 puts table pooling at −0.0035 and addressing
+> consistency at 15× less, with a crossover: consistent hashing helps private tables
+> and *hurts* a shared pool. The decoupled count gate now resolves on two independent
+> bases (pooled −0.00110 at 4.29×) and is the only arm whose error bar has been shown
+> stable across seeds. **Rounds 15-16 then closed the collision line and changed the
+> shape of the answer**: more independent hashes do nothing (0.13× across a 4× head
+> sweep, on top of saturated tables), but putting the hash memory and the routed
+> experts in the *same model* at the same total budget wins **−0.00236 at 4.66× with
+> complete seed separation** — twice the best mechanism found by eleven rounds of
+> searching inside the memory design, on the first attempt. **Round 17 then bounded
+> it**: both obvious follow-ups came back negative, including the *actual* Mobius
+> component (a private always-on expert per layer) which neither the original
+> `mobius` arm nor the combo had ever used — 0.65×, and it widens the seed bar.
+> **Round 18 walked the last cheap question — the table/expert budget split — and it
+> is asymmetric**: table-heavy (73/27) is resolvably worse (2.71×), expert-heavy
+> (26/74) flat-to-better (1.23×, unresolved), the interior monotone, and the optimum
+> sits expert-heavier than the 44/56 the combo first tried — but deleting the table
+> entirely is the worst arm, so it stays a minority of the budget. The combo is one
+> real point with no cheap iso arm left. Eighteen retractions and corrections, nearly
+> all one cause: reading a gap smaller than that arm's own error bar.
+
 ## What it is
 
 nano-scalemb covers the whole loop — **tokenization → pretraining → SFT → RL →
@@ -28,13 +77,23 @@ in the blog post above.
 - **Engram** — an [n-gram hash *memory*](https://arxiv.org/abs/2601.07372) (fixed
   hash addressing, learned contents) injected at chosen layers, fused as a
   per-stream branch through mHC (`nano_scalemb/engram.py`).
+- **MoE / Mobius** — sparse mixture-of-experts as the conditional-capacity
+  control, with one knob for cross-layer weight sharing: `--moe-share-blocks=0`
+  gives per-layer expert pools, `>0` gives the shared-pool loop of
+  [Intern-S2-Mobius](https://github.com/InternLM/Intern-S2-Mobius) plus a private
+  gated dense expert per layer. Loss-free or aux-loss balancing, Triton
+  (scattermoe) or pure-torch experts (`nano_scalemb/moe/`). FLOP and
+  scaling-param accounting are *active*-aware, so MoE and dense arms are sized
+  and compared on the same footing.
 - **Two-tier interpretability probes** for the Engram (both cheap, both CPU):
   - **Tier-1 weight probe** — `scripts/engram_weight_probe.py`: reads what was
     learned straight from the checkpoint (no forward pass).
   - **Tier-2 forward probe** — `scripts/engram_forward_probe.py`: reads what the
     model *does* on real tokens (read gate, contribution, head mix, bpb).
 - **Ready-made sweeps** for Engram layer count/placement and payload ablations
-  (`runs/run_*_sweep_*.sh`).
+  (`runs/run_*_sweep_*.sh`), plus a five-arm conditional-capacity sweep —
+  `dense | engram | engram-shared | moe | mobius` at matched active params
+  (`runs/run_conditional_capacity_sweep_mhc.sh`).
 
 ## Setup
 
@@ -61,7 +120,7 @@ python -m scripts.chat_web         # chat with a trained checkpoint
 
 | Path | What's there |
 |---|---|
-| `nano_scalemb/` | Core library — `gpt.py`, `engram.py`, `mhc.py`, `engine.py`, `optim.py`, `dataloader.py`, `tokenizer.py`, `checkpoint_manager.py`, … |
+| `nano_scalemb/` | Core library — `gpt.py`, `engram.py`, `mhc.py`, `moe/`, `engine.py`, `optim.py`, `dataloader.py`, `tokenizer.py`, `checkpoint_manager.py`, … |
 | `scripts/` | Entry points — `base_train.py`, `base_eval.py`, `chat_sft.py`, `chat_rl.py`, `chat_eval.py`, `chat_web.py`, and the Engram probes |
 | `runs/` | Shell pipelines and experiment sweeps; `runs/reports/` holds generated run reports (gitignored) |
 | `tests/` | `pytest` suite (`test_engine.py`, `test_engram.py`, `test_mhc.py`, …) |
@@ -99,13 +158,44 @@ python -m scripts.engram_forward_probe --checkpoint CKPT:STEP \
 Figures are Plotly; re-render any of them with the matching
 `docs/blog/plot_*.py`.
 
+## Conditional-capacity arms
+
+Beyond Engram, the harness carries a sparse-MoE arm so "does conditional capacity
+help?" has a well-understood control, and a cross-layer *sharing* ablation for
+both mechanisms — asking whether each layer really needs its own copy:
+
+| Arm | Flags | What it adds |
+|---|---|---|
+| dense | *(none)* | baseline |
+| engram | `--engram` | per-layer n-gram hash memories |
+| engram-shared | `--engram --engram-share-memory` | one memory table + one hash addressing scheme for every Engram layer |
+| moe | `--moe` | per-layer routed expert pools |
+| mobius | `--moe --moe-share-blocks=N --moe-shared-d-ff=D` | N routed pools shared across depth + a private gated dense expert per layer |
+
+All of them compose with `--mhc`. Run the five-arm comparison with:
+
+```bash
+bash runs/run_conditional_capacity_sweep_mhc.sh
+```
+
+Size MoE arms with the G/A/X ladder (`--moe-granularity/-expansion/-active-mult`)
+rather than raw expert counts; `A=1` means the active expert FLOPs equal one
+dense FFN. `estimate_flops()` and the scaling-law horizon both count *active*
+experts, and every MoE run prints total / active / ratio — read those three
+before reading the losses, since an MoE-vs-dense comparison is uninterpretable
+without them.
+
 ## Tests
 
 ```bash
 python -m pytest                       # full suite
 python -m pytest tests/test_engine.py -v
-python -m pytest tests/test_engram.py tests/test_mhc.py -v
+python -m pytest tests/test_engram.py tests/test_mhc.py tests/test_moe.py -v
 ```
+
+The suite is CPU-only and needs no Triton: the MoE tests use the pure-torch
+expert backend, and the scattermoe parity test skips itself when the kernel or a
+GPU is unavailable.
 
 ## Contributing
 

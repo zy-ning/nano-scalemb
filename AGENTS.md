@@ -24,6 +24,8 @@ Use these files as the primary authority before making changes:
 - `runs/miniseries.sh` and `runs/scaling_laws.sh` for experiment patterns.
 - `scripts/base_train.py`, `scripts/base_eval.py`, `scripts/chat_sft.py`, `scripts/chat_eval.py`, `scripts/chat_web.py` for script conventions.
 - `nano_scalemb/common.py`, `nano_scalemb/gpt.py`, `nano_scalemb/engine.py`, `nano_scalemb/engram.py` for core code style.
+- `nano_scalemb/moe/` for the MoE / Mobius arms (`MoEConfig.share_blocks` picks per-layer vs cross-layer-shared experts); ported from the sibling `nanochat-moe` harness, Apache-2.0, attributed per file.
+- `runs/run_conditional_capacity_sweep_mhc.sh` for the five-arm dense/engram/engram-shared/moe/mobius comparison.
 - `tests/test_engine.py` and `tests/test_attention_fallback.py` for mature test style.
 
 ## Environment and Tooling
@@ -72,3 +74,25 @@ python -m scripts.chat_web
 - Preserve readability over cleverness.
 - Match nearby patterns before introducing a new one.
 - Do not introduce a new dependency injection framework or config framework.
+- Weights shared across layers (Mobius expert pools, the shared Engram memory
+  table) must be registered on the `GPT` exactly once and handed to layers by
+  reference in a plain list — never as a submodule on each consumer. The model is
+  built on `meta` and then `to_empty()`-ed, and checkpoints load with
+  `assign=True`, so a second registration silently gives each copy its own
+  storage and unshares the weights.
+- Third-party autograd kernels (e.g. scattermoe) are often not autocast-aware:
+  they mix the autocast dtype with fp32 saved tensors and fail in *backward*, not
+  forward. Wrap such calls in `torch.amp.autocast(..., enabled=False)` and cast
+  operands explicitly. Watch out for autocast's fp32-promotion ops (`Tensor.sum`)
+  silently changing a fallback path's output dtype relative to the fast path.
+- When adding a variant that changes how much weight is *active* per token,
+  update `GPT.estimate_flops` and `GPT.num_scaling_params` with it. Otherwise MFU,
+  the reported training FLOPs, and the scaling-law token horizon are all wrong
+  for that arm, and it stops being comparable to the others.
+- **Every new buffer needs an explicit reset on the `init_weights` path.**
+  `to_empty()` fills buffers with garbage and `nn.Module.__init__` defaults do not
+  survive it, so a buffer nothing re-initializes starts at whatever was in that
+  memory. This shipped once: the PQ codebook began at ~1e38 and the commitment
+  loss read 3.2e26. Buffers that *define* behaviour (LSH bit thresholds, Engram
+  hit rates) should also be persistent, or a resumed run silently changes model
+  behaviour at the resume step.

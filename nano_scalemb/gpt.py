@@ -30,7 +30,10 @@ from nano_scalemb.engram import (
     EngramConfig,
     Engram,
     CompressedTokenizerProjection,
+    MultiHeadEmbedding,
     NgramHasher,
+    build_memory_table,
+    init_memory_table,
 )
 from nano_scalemb.mhc import (
     MHCConfig,
@@ -38,6 +41,9 @@ from nano_scalemb.mhc import (
     ManifoldConstrainedHyperConnections,
     StreamExpand,
 )
+from nano_scalemb.moe.block import MoEBlock, MoEPool
+from nano_scalemb.moe.config import MoEConfig
+from nano_scalemb.moe.experts import Experts
 
 
 @dataclass
@@ -60,6 +66,10 @@ class GPTConfig:
     # alongside Engram, the Engram composes as a per-stream branch (the faithful
     # Engram+mHC path). Without it, Engram falls back to a dense single stream.
     mhc: Optional[MHCConfig] = None
+    # Optional MoE configuration. None keeps the dense MLP everywhere (default).
+    # moe.share_blocks selects the arm: 0 = per-layer MoE, N > 0 = Mobius (N
+    # routed pools shared across depth). See nano_scalemb/moe/.
+    moe: Optional[MoEConfig] = None
 
 
 def norm(x):
@@ -175,10 +185,16 @@ class MLP(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, config, layer_idx, engram=None):
+    def __init__(self, config, layer_idx, engram=None, moe_pool=None):
         super().__init__()
         self.attn = CausalSelfAttention(config, layer_idx)
-        self.mlp = MLP(config)
+        # MoE layers swap the dense MLP for an MoEBlock. MoEBlock.forward has the
+        # same (x) -> y contract as MLP.forward, so nothing below changes: both
+        # the dense path and the mHC lambda call self.mlp identically.
+        self.is_moe = moe_pool is not None
+        self.mlp = (
+            MoEBlock(config.n_embd, config.moe, moe_pool) if self.is_moe else MLP(config)
+        )
         # Optional Engram module (paper Figure 1, p.3: Engram fires before attention)
         self.engram: Optional[Engram] = engram
         self.mhc = config.mhc
@@ -321,6 +337,8 @@ class GPT(nn.Module):
         # Example: GPTConfig(engram=EngramConfig(layer_ids=(2, 6)))
         engram_modules: dict = {}
         compression = None
+        self.engram_shared_memory: Optional[MultiHeadEmbedding] = None
+        self.engram_shared_discretizer = None
         if config.engram is not None:
             with torch.device("cpu"):
                 if config.engram.use_tokenizer_compression:
@@ -333,6 +351,29 @@ class GPT(nn.Module):
                 self._ngram_hasher = NgramHasher(
                     config.engram, config.vocab_size, compression
                 )
+                # Shared-memory ablation: one table for every Engram layer,
+                # owned here (registered exactly once) and handed to the Engrams
+                # by reference. Every layer also hashes with the canonical
+                # layer's primes, so the same n-gram hits the same row at every
+                # depth. This is the Engram analogue of the Mobius shared pool.
+                if config.engram.share_memory and config.engram.layer_ids:
+                    self.engram_shared_memory = self._build_shared_engram_memory(
+                        config, self._ngram_hasher
+                    )
+                    # Share the discretizer too, when addressing is contextual.
+                    # Otherwise every layer gets its own seeded projection and
+                    # the same hidden state lands on unrelated rows of the
+                    # SHARED table at different depths -- a bigger table, not a
+                    # shared memory (see EngramConfig.share_memory).
+                    if config.engram.address_source in ("lsh", "pq", "hybrid"):
+                        from nano_scalemb.discretize import build_discretizer
+
+                        self.engram_shared_discretizer = build_discretizer(
+                            config.engram,
+                            config.n_embd,
+                            min(config.engram.layer_ids),
+                            num_hash_heads=self._ngram_hasher.num_hash_heads,
+                        )
             for layer_idx in config.engram.layer_ids:
                 engram_modules[str(layer_idx)] = Engram(
                     cfg=config.engram,
@@ -341,10 +382,28 @@ class GPT(nn.Module):
                     tokenizer_vocab_size=config.vocab_size,
                     compression=compression,
                     backbone_mhc=config.mhc is not None,
+                    shared_embedding=self.engram_shared_memory,
+                    shared_discretizer=self.engram_shared_discretizer,
                 )
         # Register Engram modules so they are tracked by PyTorch
         self.engram_modules = nn.ModuleDict(engram_modules)
         self._engram_compression = compression
+
+        # Build the routed MoE pools. Per-layer MoE gets one pool per MoE layer;
+        # Mobius (share_blocks > 0) gets a smaller pool list that MoE layers index
+        # into round-robin, so router weights, expert weights and balancer state
+        # are shared across depth. The pools are registered here exactly once and
+        # handed to Blocks by reference (see MoEBlock's docstring for why).
+        self.moe_pools = nn.ModuleList()
+        self._moe_pool_for_layer: dict = {}
+        if config.moe is not None:
+            num_pools = config.moe.num_pools(config.n_layer)
+            self.moe_pools = nn.ModuleList(
+                [MoEPool(config.n_embd, config.moe) for _ in range(num_pools)]
+            )
+            for layer_idx in config.moe.moe_layer_ids(config.n_layer):
+                pool_idx = config.moe.pool_index(layer_idx, config.n_layer)
+                self._moe_pool_for_layer[layer_idx] = self.moe_pools[pool_idx]
 
         self.transformer = nn.ModuleDict(
             {
@@ -359,6 +418,7 @@ class GPT(nn.Module):
                                 if str(layer_idx) in self.engram_modules
                                 else None
                             ),
+                            moe_pool=self._moe_pool_for_layer.get(layer_idx),
                         )
                         for layer_idx in range(config.n_layer)
                     ]
@@ -400,6 +460,51 @@ class GPT(nn.Module):
         )  # persistent=False means it's not saved to the checkpoint
         self.register_buffer("sin", sin, persistent=False)
 
+    @staticmethod
+    def _build_shared_engram_memory(config, hasher):
+        """One memory table for every Engram layer (the share_memory ablation).
+
+        Sized from the canonical layer's primes, which under share_memory are the
+        primes every layer hashes with.
+        """
+        engram_cfg = config.engram
+        assert engram_cfg.address_source != "pkm", (
+            "share_memory with address_source='pkm' is not supported: the "
+            "product-key memory owns its own keys and values, so there is no "
+            "MultiHeadEmbedding table to share."
+        )
+        num_heads = hasher.num_hash_heads
+        head_dim = engram_cfg.memory_dim // num_heads
+        canonical = hasher.resolve_layer_id(min(engram_cfg.layer_ids))
+        head_vocab_sizes = [
+            hasher.prime_table[canonical][ngram_idx][head_idx]
+            # len(ngram_orders), not max_ngram_size - 1: at max_ngram_size=1 the
+            # hasher keeps one unigram order, so the arithmetic version would
+            # build a table with no heads at all.
+            for ngram_idx in range(len(hasher.ngram_orders))
+            for head_idx in range(engram_cfg.n_head_per_ngram)
+        ]
+        return build_memory_table(
+            engram_cfg, head_vocab_sizes, head_dim, config.n_embd
+        )
+
+    def _engram_memory_tables(self):
+        """Every distinct memory table in the model, deduplicated.
+
+        With share_memory a single table is read by several Engram layers, so
+        callers that iterate tables (init, optimizer groups, param counting) must
+        see it once, not once per layer.
+        """
+        tables = {}
+        if getattr(self, "engram_shared_memory", None) is not None:
+            tables[id(self.engram_shared_memory)] = self.engram_shared_memory
+        if hasattr(self, "engram_modules"):
+            for engram in self.engram_modules.values():
+                table = engram.memory_table
+                if table is not None:
+                    tables[id(table)] = table
+        return list(tables.values())
+
     @torch.no_grad()
     def init_weights(self):
         """
@@ -432,8 +537,13 @@ class GPT(nn.Module):
             torch.nn.init.uniform_(block.attn.c_k.weight, -s, s)
             torch.nn.init.uniform_(block.attn.c_v.weight, -s, s)
             torch.nn.init.zeros_(block.attn.c_proj.weight)  # projections are zero
-            torch.nn.init.uniform_(block.mlp.c_fc.weight, -s, s)
-            torch.nn.init.zeros_(block.mlp.c_proj.weight)
+            if block.is_moe:
+                # MoEBlock inits its per-layer parts only; the routed pool is
+                # shared under Mobius so it is initialized once, below.
+                block.mlp.reset_parameters()
+            else:
+                torch.nn.init.uniform_(block.mlp.c_fc.weight, -s, s)
+                torch.nn.init.zeros_(block.mlp.c_proj.weight)
             if block.engram is not None:
                 block.engram.init_weights()
             if self.config.mhc is not None:
@@ -443,6 +553,21 @@ class GPT(nn.Module):
                     block.mhc_engram.init_weights()
         if self.mhc_head is not None:
             self.mhc_head.init_weights()
+
+        # Shared Engram memory: owned here, so initialized here exactly once
+        # (Engram.init_weights skips a table it does not own).
+        if self.engram_shared_memory is not None:
+            init_memory_table(self.engram_shared_memory, self.config.engram.ablation_mode)
+        if self.engram_shared_discretizer is not None:
+            # Owned here, so initialized here exactly once (its buffers come back
+            # as garbage from to_empty like every other buffer).
+            self.engram_shared_discretizer.reset_parameters()
+
+        # Routed MoE pools: initialized once each, since Mobius shares them.
+        # This also zeroes the balancer buffers, which come back uninitialized
+        # from to_empty().
+        for pool in self.moe_pools:
+            pool.reset_parameters()
 
         # Per-layer scalars
         self.resid_lambdas.fill_(1.0)  # 1.0 => typical residual connections at init
@@ -525,38 +650,68 @@ class GPT(nn.Module):
         return self.transformer.wte.weight.device
 
     def _engram_embedding_params(self):
-        if not hasattr(self, "engram_modules"):
-            return []
-        return [
-            p
-            for engram in self.engram_modules.values()
-            if engram.multi_head_embedding is not None
-            for p in engram.multi_head_embedding.embedding.parameters()
-            if p.requires_grad
-        ]
+        return [p for p in self._all_engram_embedding_params() if p.requires_grad]
 
     def _all_engram_embedding_params(self):
-        if not hasattr(self, "engram_modules"):
-            return []
+        # Deduplicated: with EngramConfig.share_memory one table serves every
+        # Engram layer and must appear in the optimizer/param counts once.
+        #
+        # content_parameters(), not all of them: a LowRankMemory also owns a dense
+        # query projection, which belongs in the Muon group and in the generic
+        # FLOP term like any other matrix, not with the addressed rows.
         return [
             p
-            for engram in self.engram_modules.values()
-            if engram.multi_head_embedding is not None
-            for p in engram.multi_head_embedding.embedding.parameters()
+            for table in self._engram_memory_tables()
+            for p in table.content_parameters()
+        ]
+
+    def _expert_params(self):
+        """The 3D routed-expert weight tensors (w_in / w_out).
+
+        Muon is 2D-only, so these need their own AdamW group at expert_lr rather
+        than falling into the generic >2D bucket at matrix_lr.
+        """
+        return [
+            p
+            for mod in self.modules()
+            if isinstance(mod, Experts)
+            for p in mod.parameters()
         ]
 
     def _split_transformer_block_params(self):
         engram_embed_params = self._engram_embedding_params()
         all_engram_embed_ids = {id(p) for p in self._all_engram_embedding_params()}
+        expert_params = self._expert_params()
+        expert_param_ids = {id(p) for p in expert_params}
         muon_params = []
         nonmatrix_decay_params = []
         nonmatrix_nodecay_params = []
         mhc_head_params = []
         if self.mhc_head is not None:
             mhc_head_params = list(self.mhc_head.parameters())
-        for p in list(self.transformer.h.parameters()) + mhc_head_params:
-            if id(p) in all_engram_embed_ids:
+        # The routed MoE pools live on the model (not inside transformer.h) so
+        # Mobius can share them across layers; scan them here alongside the
+        # blocks, the same way mhc_head params are folded in.
+        moe_pool_params = list(self.moe_pools.parameters())
+        # Same for a shared Engram memory table: with share_memory it hangs off
+        # the GPT, so a LowRankMemory's query projection would otherwise reach no
+        # optimizer group at all and trip the param-count assert below.
+        engram_table_params = [
+            p for table in self._engram_memory_tables() for p in table.parameters()
+        ]
+        seen: set = set()
+        for p in (
+            list(self.transformer.h.parameters())
+            + mhc_head_params
+            + moe_pool_params
+            + engram_table_params
+        ):
+            if id(p) in all_engram_embed_ids or id(p) in expert_param_ids:
                 continue
+            # Per-layer tables are reachable both ways; count each param once.
+            if id(p) in seen:
+                continue
+            seen.add(id(p))
             if p.ndim == 2:
                 muon_params.append(p)
             elif p.ndim > 2:
@@ -568,7 +723,44 @@ class GPT(nn.Module):
             nonmatrix_decay_params,
             nonmatrix_nodecay_params,
             engram_embed_params,
+            expert_params,
         )
+
+    def _moe_layer_pools(self):
+        """The routed pool each MoE layer reads, in layer order.
+
+        With Mobius the same pool object appears several times: the weights are
+        stored once but *read* once per layer, and FLOP/active-param accounting
+        has to follow the reads, not the storage.
+        """
+        return [block.mlp.pool for block in self.transformer.h if block.is_moe]
+
+    def _moe_flops_per_token(self):
+        """Active MoE FLOPs per token, and the pool params to exclude from the
+        generic param-based FLOP estimate.
+
+        The generic ``6 * nparams`` term is wrong for MoE twice over: it counts
+        all n_experts when only top_k fire per token (over-count), and with a
+        shared Mobius pool it counts the weights once when several layers read
+        them (under-count). So we exclude the pools entirely and add the real
+        per-layer active cost back here.
+        """
+        pools = self._moe_layer_pools()
+        if not pools:
+            return 0, 0
+        d_model = self.config.n_embd
+        flops = 0
+        for pool in pools:
+            experts = pool.experts
+            # router: d_model x n_experts matmul, every token
+            flops += 6 * d_model * experts.n_experts
+            # experts: top_k of them fire, each is w_in (d_ff x d_model) + w_out
+            flops += 6 * experts.top_k * 2 * d_model * experts.d_ff
+        # Deduplicate for the exclusion: shared pools are stored once.
+        pool_params_numel = sum(
+            p.numel() for p in {id(p): p for p in self.moe_pools.parameters()}.values()
+        )
+        return flops, pool_params_numel
 
     def estimate_flops(self):
         """
@@ -586,10 +778,37 @@ class GPT(nn.Module):
         # Exclude non-matmul params: embeddings and per-layer scalars
         value_embeds_numel = sum(ve.weight.numel() for ve in self.value_embeds.values())
         engram_embeds_numel = sum(p.numel() for p in self._all_engram_embedding_params())
+        # MoE pools are excluded from the generic term and accounted for exactly
+        # (active experts only, once per reading layer) in moe_flops below.
+        moe_flops, moe_pool_numel = self._moe_flops_per_token()
+        # Product-key memory: the value bank is addressed (topk of n_keys**2 rows
+        # per head), so the generic 6*nparams term would charge for the whole
+        # bank. Exclude it and add the real cost back: scoring 2*n_keys sub-keys
+        # plus reading topk value rows, per head per layer.
+        pk_values_numel = 0
+        pk_flops = 0
+        # A constant-row read is a pure gather and costs nothing here. With
+        # value_rank > 0 the gathered rows ARE multiplied (q through w_in, then
+        # rank-space through w_out), so the excluded rows owe FLOPs back -- once
+        # per *reading* layer, since a shared table is read at every depth.
+        engram_read_flops = 0
+        for engram in getattr(self, "engram_modules", {}).values():
+            table = engram.memory_table
+            if table is not None:
+                engram_read_flops += table.read_flops_per_token()
+            pk = engram.product_key
+            if pk is not None:
+                pk_values_numel += pk.values.numel()
+                pk_flops += 6 * pk.num_heads * (
+                    2 * pk.n_keys * pk.half_dim  # sub-key scoring
+                    + pk.topk * pk.value_dim  # weighted value read
+                )
         nparams_exclude = (
             self.transformer.wte.weight.numel()
             + value_embeds_numel
             + engram_embeds_numel
+            + moe_pool_numel
+            + pk_values_numel
             + self.resid_lambdas.numel()
             + self.x0_lambdas.numel()
         )
@@ -604,7 +823,13 @@ class GPT(nn.Module):
             window = window_size[0]  # (left, right) tuple, we use left
             effective_seq = t if window < 0 else min(window, t)
             attn_flops += 12 * h * q * effective_seq
-        num_flops_per_token = 6 * (nparams - nparams_exclude) + attn_flops
+        num_flops_per_token = (
+            6 * (nparams - nparams_exclude)
+            + attn_flops
+            + moe_flops
+            + pk_flops
+            + engram_read_flops
+        )
         return num_flops_per_token
 
     def num_scaling_params(self):
@@ -618,6 +843,12 @@ class GPT(nn.Module):
 
         Returns a dict with counts for each parameter group, so downstream analysis
         can experiment with which combination gives the cleanest scaling laws.
+
+        For MoE runs, `expert_total` is the stored expert weight and
+        `expert_active` is the share a single token actually reads, counted once
+        per reading layer (so a shared Mobius pool read by L layers contributes L
+        times to `expert_active` but once to `expert_total`). Compare MoE and
+        dense arms on active, not total.
         """
         # Count each group separately (mirrors the grouping in setup_optimizers)
         (
@@ -625,6 +856,7 @@ class GPT(nn.Module):
             block_decay_params,
             block_nodecay_params,
             engram_embed_params,
+            expert_params,
         ) = self._split_transformer_block_params()
         wte = sum(p.numel() for p in self.transformer.wte.parameters())
         value_embeds = sum(p.numel() for p in self.value_embeds.parameters())
@@ -639,6 +871,47 @@ class GPT(nn.Module):
         transformer_nonmatmul = sum(p.numel() for p in block_decay_params) + sum(
             p.numel() for p in block_nodecay_params
         )
+        # Engram memory is addressed, not dense: a token reads exactly
+        # num_hash_heads rows of head_dim each, per Engram layer, however large
+        # the table is. Counting the whole table as "active" would make Engram
+        # look ~5 orders of magnitude more active than it is and wreck any
+        # iso-active comparison against MoE or dense.
+        engram_active = 0
+        engram_stored = 0
+        for engram in getattr(self, "engram_modules", {}).values():
+            table = engram.memory_table
+            if table is not None:
+                # With value_rank > 0 a read pulls rank*(query_dim + head_dim)
+                # weights per head instead of head_dim, so the table asks the
+                # memory rather than assuming constant rows.
+                engram_active += table.active_params_per_token()
+            pk = engram.product_key
+            if pk is not None:
+                # Product-key memory is addressed too: a token reads topk of the
+                # n_keys**2 value rows per head. The keys themselves ARE read
+                # densely (every sub-key is scored), so they count as active in
+                # full -- unlike the values.
+                engram_stored += pk.values.numel()
+                engram_active += pk.num_heads * pk.topk * pk.value_dim
+        expert_total = sum(p.numel() for p in expert_params)
+        # Active expert weight: top_k/n_experts of the bank, per reading layer.
+        expert_active = 0
+        for pool in self._moe_layer_pools():
+            experts = pool.experts
+            bank = experts.w_in.numel() + experts.w_out.numel()
+            expert_active += round(bank * experts.top_k / experts.n_experts)
+        # Router gates are dense but, like the experts, a shared Mobius pool's
+        # gate is stored once and read once per layer. Tracked separately so
+        # active accounting can count reads while `total` counts storage.
+        router_total = sum(
+            p.numel()
+            for pool in {id(p): p for p in self.moe_pools}.values()
+            for p in pool.router.parameters()
+        )
+        router_active = sum(
+            sum(p.numel() for p in pool.router.parameters())
+            for pool in self._moe_layer_pools()
+        )
         scalars = self.resid_lambdas.numel() + self.x0_lambdas.numel()
         total = (
             wte
@@ -648,6 +921,7 @@ class GPT(nn.Module):
             + lm_head
             + transformer_matrices
             + transformer_nonmatmul
+            + expert_total
             + scalars
         )
         assert total == sum(p.numel() for p in self.parameters()), (
@@ -658,9 +932,15 @@ class GPT(nn.Module):
             "value_embeds": value_embeds,
             "engram_embeds": engram_embeds,
             "engram_frozen_embeds": engram_frozen_embeds,
+            "engram_active": engram_active,
+            "engram_pk_values": engram_stored,
             "lm_head": lm_head,
             "transformer_matrices": transformer_matrices,
             "transformer_nonmatmul": transformer_nonmatmul,
+            "expert_total": expert_total,
+            "expert_active": expert_active,
+            "router_total": router_total,
+            "router_active": router_active,
             "scalars": scalars,
             "total": total,
         }
@@ -683,6 +963,7 @@ class GPT(nn.Module):
             block_decay_params,
             block_nodecay_params,
             engram_embed_params,
+            expert_params,
         ) = self._split_transformer_block_params()
         value_embeds_params = list(self.value_embeds.parameters())
         embedding_params = list(self.transformer.wte.parameters())
@@ -696,7 +977,7 @@ class GPT(nn.Module):
             block_decay_params
         ) + len(block_nodecay_params) + len(resid_params) + len(x0_params) + len(
             engram_embed_params
-        )
+        ) + len(expert_params)
 
         # Scale the LR for the AdamW parameters by ∝1/√dmodel (tuned for 768 dim model)
         dmodel_lr_scale = (model_dim / 768) ** -0.5
@@ -764,6 +1045,19 @@ class GPT(nn.Module):
                 weight_decay=0.0,
             ),  # higher beta1 for x0
         ]
+        # Routed expert weights are 3D, and Muon is 2D-only, so they get their own
+        # AdamW group at the (typically much lower) expert_lr.
+        if expert_params:
+            param_groups.append(
+                dict(
+                    kind="adamw",
+                    params=expert_params,
+                    lr=self.config.moe.expert_lr * dmodel_lr_scale,
+                    betas=adam_betas,
+                    eps=1e-10,
+                    weight_decay=weight_decay,
+                )
+            )
         # Add Engram embeddings group if engram is enabled
         if engram_embed_params:
             param_groups.insert(

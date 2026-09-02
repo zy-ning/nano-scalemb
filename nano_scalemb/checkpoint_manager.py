@@ -13,6 +13,7 @@ from nano_scalemb.common import get_base_dir
 from nano_scalemb.engram import EngramConfig
 from nano_scalemb.gpt import GPT, GPTConfig
 from nano_scalemb.mhc import MHCConfig
+from nano_scalemb.moe.config import MoEConfig
 from nano_scalemb.tokenizer import get_tokenizer
 from nano_scalemb.common import setup_default_logging
 
@@ -66,6 +67,12 @@ def _patch_missing_config_keys(model_config_kwargs):
             dict(model_config_kwargs["mhc"]), _LEGACY_MHC_CONFIG_KEYS, "mhc"
         )
         model_config_kwargs["mhc"] = MHCConfig(**mhc_kwargs)
+    # Old models did not have MoE
+    if "moe" not in model_config_kwargs:
+        model_config_kwargs["moe"] = None
+        log0(f"Patching missing moe in model config to None")
+    elif isinstance(model_config_kwargs["moe"], dict):
+        model_config_kwargs["moe"] = MoEConfig(**model_config_kwargs["moe"])
 
 
 # Engram param-name fragments that were removed in the legacy cleanup. In
@@ -121,6 +128,22 @@ def _patch_missing_keys(model_data, model_config):
     if "x0_lambdas" not in model_data:
         model_data["x0_lambdas"] = torch.zeros(n_layer)
         log0(f"Patching missing x0_lambdas in model data to 0.0")
+
+
+def _patch_missing_merge_buffers(model_data, model):
+    """Backfill Engram row-merge buffers absent from pre-feature checkpoints.
+
+    row_alias (identity) and _merged (False) are new always-registered buffers on
+    every AddressedMemory. An old checkpoint lacks them, so strict load would
+    fail; copy the freshly-built model's identity defaults in by exact key."""
+    model_sd = model.state_dict()
+    patched = 0
+    for key, val in model_sd.items():
+        if (key.endswith("row_alias") or key.endswith("_merged")) and key not in model_data:
+            model_data[key] = val.detach().clone()
+            patched += 1
+    if patched:
+        log0(f"Patching {patched} missing Engram row-merge buffers (identity alias)")
 
 
 def save_checkpoint(
@@ -197,7 +220,19 @@ def build_model(checkpoint_dir, step, device, phase):
     model.init_weights()  # note: this is dumb, but we need to init the rotary embeddings. TODO: fix model re-init
     # Drop legacy Engram params removed in the fusion cleanup so strict load still works.
     _strip_legacy_state_dict_keys(model_data, set(model.state_dict().keys()))
+    # Backfill Engram row-merge buffers (row_alias / _merged) for checkpoints
+    # written before the feature existed: identity alias + not-merged reproduces
+    # the pre-feature model exactly. init_weights() already set them on `model`,
+    # so copy those defaults in by name (covers shared and per-layer tables).
+    _patch_missing_merge_buffers(model_data, model)
     model.load_state_dict(model_data, strict=True, assign=True)
+    # assign=True swaps the _merged buffer in but leaves each table's Python-bool
+    # _merged_flag stale, so a resumed MERGED run would keep the no-op _shift
+    # graph and silently revert the merge. Refresh the flags from the buffers.
+    if hasattr(model, "_engram_memory_tables"):
+        for table in model._engram_memory_tables():
+            if hasattr(table, "sync_merge_flags"):
+                table.sync_merge_flags()
     # Put the model in the right training phase / mode
     if phase == "eval":
         model.eval()
