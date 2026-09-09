@@ -218,6 +218,29 @@ parser.add_argument(
     help="0 = a memory row is a constant vector (the paper); k>0 = a rank-k map of the hidden state",
 )
 parser.add_argument(
+    "--engram-value-table",
+    type=str,
+    default="rows",
+    choices=["rows", "tngram"],
+    help="'rows' (default) = hash-indexed row tables (MultiHeadEmbedding/LowRankMemory); "
+    "'tngram' = one CP-factorized tensor with token-position factors shared across "
+    "n-gram orders (arXiv 2606.08347), indexed by window tokens directly",
+)
+parser.add_argument(
+    "--engram-cp-rank",
+    type=int,
+    default=0,
+    help="CP rank R for --engram-value-table=tngram (>=1 required there; ignored otherwise)",
+)
+parser.add_argument(
+    "--engram-tngram-independent-factors",
+    action="store_true",
+    help="tngram only: give each n-gram order its OWN token-position factors instead "
+    "of sharing A across orders (arXiv 2606.08347 shares by default). Ablation "
+    "isolating whether cross-order sharing is the liability; match params by scaling "
+    "cp_rank down (orders {2,3}: --engram-cp-rank=6 independent == 10 shared)",
+)
+parser.add_argument(
     "--engram-value-query-dim",
     type=int,
     default=128,
@@ -321,6 +344,26 @@ parser.add_argument(
     "mid-training. 'semantic' = a static external token-embedding centroid per row "
     "(--engram-semantic-prior-path), merged FROZEN at step 0 so the table trains "
     "already-collapsed onto a semantic partition. Token addressing only.",
+)
+parser.add_argument(
+    "--engram-merge-writeback",
+    type=str,
+    default="survivor",
+    choices=["survivor", "mean", "mean_freq"],
+    help="what value the survivor keeps after merge. 'survivor' (default) discards "
+    "merged-away rows' learned values (original behavior). 'mean' sets the survivor "
+    "to the plain mean of its cluster, banking the merged rows' learning. 'mean_freq' "
+    "uses the hit-weighted mean (frequent rows dominate); it tracks a hit_rate buffer "
+    "without changing the forward read.",
+)
+parser.add_argument(
+    "--engram-merge-cluster",
+    type=str,
+    default="chunk",
+    choices=["chunk", "nn"],
+    help="how the lsh path groups rows. 'chunk' (default) cuts code-sorted rows into "
+    "equal-size contiguous groups. 'nn' places group boundaries at least-similar "
+    "adjacent seams so groups hold value-similar rows (true nearest neighbours).",
 )
 parser.add_argument(
     "--engram-semantic-prior-path",
@@ -715,6 +758,12 @@ def build_engram_config() -> EngramConfig | None:
             raise ValueError("--engram-count-gate-decouple requires --engram")
         if args.engram_backoff_keyset:
             raise ValueError("--engram-backoff-keyset requires --engram")
+        if args.engram_value_table != "rows":
+            raise ValueError("--engram-value-table requires --engram")
+        if args.engram_cp_rank:
+            raise ValueError("--engram-cp-rank requires --engram")
+        if args.engram_tngram_independent_factors:
+            raise ValueError("--engram-tngram-independent-factors requires --engram")
         return None
     if args.engram_count_gate_decouple and not args.engram_count_gate:
         raise ValueError(
@@ -848,6 +897,55 @@ def build_engram_config() -> EngramConfig | None:
             raise ValueError(
                 "--engram-merge-source=semantic requires --engram-semantic-prior-path"
             )
+    if args.engram_value_table == "tngram":
+        # A CP-factorized tensor has no hash-indexed rows: it indexes the window
+        # tokens directly, carries a single payload per read, and cannot be
+        # value-merged (no rows to cluster). Forbid every option that assumes a
+        # MultiHeadEmbedding/LowRankMemory row table, so a silent no-op is a hard
+        # error instead.
+        if args.engram_cp_rank < 1:
+            raise ValueError(
+                "--engram-value-table=tngram requires --engram-cp-rank >= 1"
+            )
+        if args.engram_value_rank:
+            raise ValueError(
+                "--engram-value-table=tngram is incompatible with "
+                "--engram-value-rank (it replaces the row table entirely)"
+            )
+        if args.engram_key_dim:
+            raise ValueError(
+                "--engram-value-table=tngram is incompatible with --engram-key-dim "
+                "(a factorized read carries no separate key)"
+            )
+        if args.engram_address_source != "tokens":
+            raise ValueError(
+                "--engram-value-table=tngram indexes window tokens directly, so it "
+                "requires --engram-address-source=tokens"
+            )
+        if args.engram_merge_frac:
+            raise ValueError(
+                "--engram-value-table=tngram has no rows to merge; "
+                "--engram-merge-frac is undefined"
+            )
+        if args.engram_readout_whiten or args.engram_count_gate:
+            raise ValueError(
+                "--engram-value-table=tngram has no per-row hit statistics; "
+                "--engram-readout-whiten / --engram-count-gate do not apply"
+            )
+        if args.engram_ablation_mode == "mlp":
+            raise ValueError(
+                "--engram-value-table=tngram does not apply to "
+                "--engram-ablation-mode=mlp: that control has no memory table"
+            )
+    elif args.engram_cp_rank:
+        raise ValueError(
+            "--engram-cp-rank only applies to --engram-value-table=tngram"
+        )
+    elif args.engram_tngram_independent_factors:
+        raise ValueError(
+            "--engram-tngram-independent-factors only applies to "
+            "--engram-value-table=tngram"
+        )
     layer_ids = tuple(
         int(layer.strip()) for layer in args.engram_layers.split(",") if layer.strip()
     )
@@ -891,6 +989,9 @@ def build_engram_config() -> EngramConfig | None:
         value_rank=args.engram_value_rank,
         value_query_dim=args.engram_value_query_dim,
         value_activation=args.engram_value_activation,
+        value_table=args.engram_value_table,
+        cp_rank=args.engram_cp_rank,
+        tngram_share_factors=not args.engram_tngram_independent_factors,
         key_dim=args.engram_key_dim,
         count_gate=args.engram_count_gate,
         count_gate_decay=args.engram_count_gate_decay,
@@ -904,6 +1005,8 @@ def build_engram_config() -> EngramConfig | None:
         merge_at_frac=args.engram_merge_at_frac,
         merge_metric=args.engram_merge_metric,
         merge_source=args.engram_merge_source,
+        merge_writeback=args.engram_merge_writeback,
+        merge_cluster=args.engram_merge_cluster,
         semantic_prior_path=args.engram_semantic_prior_path,
     )
 
@@ -1400,6 +1503,8 @@ if engram_semantic_merge and not resuming:
                 seed=engram_config.seed,
                 feature_override=feature.to(dev).float(),
                 keep_mask=hit_mask.to(dev),
+                writeback=engram_config.merge_writeback,
+                cluster=engram_config.merge_cluster,
             )
             n_part = int(hit_mask.sum())
             print0(
@@ -1586,12 +1691,16 @@ while True:
                     engram_config.merge_frac,
                     metric=engram_config.merge_metric,
                     seed=engram_config.seed,
+                    writeback=engram_config.merge_writeback,
+                    cluster=engram_config.merge_cluster,
                 )
                 print0(
                     f"Engram row merge @ step {step}: "
                     f"{stats['total_rows']:,} -> {stats['effective_rows']:,} "
                     f"effective rows ({stats['effective_rows']/stats['total_rows']:.1%}), "
-                    f"metric={engram_config.merge_metric}"
+                    f"metric={engram_config.merge_metric} "
+                    f"writeback={engram_config.merge_writeback} "
+                    f"cluster={engram_config.merge_cluster}"
                 )
 
     # -------------------------------------------------------------------------

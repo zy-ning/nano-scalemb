@@ -187,6 +187,29 @@ class EngramConfig:
     value_rank: int = 0
     value_query_dim: int = 128  # width of the shared projection of h
     value_activation: str = "gelu"  # "gelu" | "relu" | "identity"
+    # --- Tensorized n-gram value table (TN-gram, arXiv 2606.08347) ------------
+    # The paper's critique of this Engram: it keeps a SEPARATE hash table per
+    # n-gram order (orders {2,3} here, n_head_per_ngram heads each), so nested
+    # n-grams cannot share latent structure and every order pays its own
+    # collisions. TN-gram instead represents the whole n-gram embedding space as
+    # ONE rank-R CP tensor whose token-position factors A_1..A_N are SHARED across
+    # orders, indexed directly by the window token ids (not a hash). Params drop
+    # from O(V^n d) to O(n V R + d R): a value-STORAGE change, orthogonal to
+    # addressing/gate/short-conv, which are all reused unchanged.
+    #
+    # value_table="rows" (default) is the existing MultiHeadEmbedding/LowRankMemory
+    # ladder, byte-identical to every prior run. "tngram" swaps in the CP table
+    # (TensorizedNgramMemory); cp_rank sets R. Only valid with address_source=
+    # "tokens", value_rank=0, key_dim=0, and no row merge (a factorized table has
+    # no rows to cluster). See docs and build_memory_table.
+    value_table: str = "rows"   # "rows" | "tngram"
+    cp_rank: int = 0            # CP rank R when value_table="tngram" (>=1 required)
+    # tngram only: True (default, paper arXiv 2606.08347) shares the token-position
+    # factors A across n-gram orders; False gives each order its OWN factors (the
+    # ablation isolating whether cross-order sharing is the liability). Independent
+    # A costs sum(orders)/max_ngram_size more A-params at equal R, so match by
+    # scaling R down (orders {2,3}: cp_rank=6 independent == cp_rank=10 shared).
+    tngram_share_factors: bool = True
     # --- Separate key and value per row ---------------------------------------
     # Today one stored vector serves BOTH roles: the read is projected once by
     # stream_key_proj to compute the relevance gate and once by value_proj to
@@ -313,6 +336,22 @@ class EngramConfig:
     # hash(token-window) buckets) -- NOT the closed hidden-state idea-2.
     merge_source: str = "value"      # "value" | "semantic"
     semantic_prior_path: str = ""    # feature/hit_mask .pt for merge_source="semantic"
+    # merge_writeback picks WHAT value the survivor row keeps after clustering.
+    # "survivor" (default, original behavior) keeps ONLY the survivor's own value and
+    # discards every merged-away member's learned value -- at frac 0.5 that deletes
+    # half the table's learning at the merge step. "mean" sets the survivor to the
+    # PLAIN mean of its cluster's values, so the merged rows' learning is banked into
+    # the survivor instead of thrown away. "mean_freq" uses the HIT-WEIGHTED mean
+    # (rows addressed more often dominate the merged value); it needs a tracked
+    # hit_rate, so build_memory_table turns on track_hits_for_merge for it -- which
+    # tracks the buffer WITHOUT changing the forward read (unlike whiten/count_gate).
+    merge_writeback: str = "survivor"  # "survivor" | "mean" | "mean_freq"
+    # merge_cluster picks HOW rows are grouped on the scalable (lsh) path. "chunk"
+    # (default, original behavior) sorts rows by sign-LSH code and cuts into forced
+    # equal-size contiguous groups -- pairs are blind code-adjacency. "nn" keeps the
+    # code-sort for locality but pairs each row with whichever code-neighbor is closer
+    # in actual cosine, so pairs are true nearest neighbours in value space.
+    merge_cluster: str = "chunk"       # "chunk" | "nn"
 
 
 # ---------------------------------------------------------------------------
@@ -623,6 +662,9 @@ class NgramHasher:
         # self._hash_base is the radix used to encode an n-gram window as one
         # int64 id; it MUST match the base the precompute used (V_compressed).
         self._hash_base = V_compressed
+        # Public alias: the compressed alphabet size a token address indexes into.
+        # TN-gram sizes its A factors by this (one row per compressed token id).
+        self.vocab_size = V_compressed
         self.backoff_context_keep = int(getattr(cfg, "backoff_context_keep", 1))
         # order -> sorted int64 kept window-ids (CPU); device copies cached lazily.
         self._backoff_keysets: Dict[int, torch.Tensor] = {}
@@ -829,6 +871,35 @@ class NgramHasher:
         # 5. Stack: [B, T, n_orders * K]
         return torch.cat(all_hashes, dim=2)
 
+    def compressed_windows(
+        self,
+        input_ids: torch.Tensor,
+        compressed_input_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Raw compressed n-gram window tokens, for a table that indexes the
+        window directly instead of a hash of it (TN-gram).
+
+        Returns [B, T, max_ngram_size] int64, where ``[..., k]`` is the compressed
+        token at position ``t-k`` (k=0 is the current token), left-padded with
+        pad_id -- exactly the ``shifts`` the hasher builds internally. This does
+        NOT touch ``hash()`` (a few lines are duplicated on purpose) so the hash
+        path every other table uses stays byte-identical.
+        """
+        if compressed_input_ids is not None:
+            x = compressed_input_ids
+        elif self.use_compression:
+            assert self.compression is not None
+            x = self.compression.compress(input_ids)
+        else:
+            x = input_ids
+        T = x.size(1)
+        shifts = [x]
+        for k in range(1, self.cfg.max_ngram_size):
+            padded = torch.full_like(x, self.pad_id)
+            padded[:, k:] = x[:, : T - k]
+            shifts.append(padded)
+        return torch.stack(shifts, dim=-1)  # [B, T, max_ngram_size]
+
 
 # ---------------------------------------------------------------------------
 # MultiHeadEmbedding
@@ -881,6 +952,7 @@ class AddressedMemory(nn.Module):
         count_gate_fourier_max_u: float = 7.0,
         count_gate_decouple: bool = False,
         heads_per_group: int = 0,
+        track_hits_for_merge: bool = False,
     ) -> None:
         super().__init__()
         self.num_heads = len(list_of_N)
@@ -931,7 +1003,11 @@ class AddressedMemory(nn.Module):
         self.whiten_max = whiten_max
         self.count_gate = count_gate
         # Both features read the same statistic; whichever is on pays for it.
-        self.track_hit_rate = whiten or count_gate
+        # track_hits_for_merge tracks the SAME hit_rate buffer for the value-aware
+        # merge (writeback="mean_freq") but applies NO read weighting, so the forward
+        # pass stays bit-identical to a run with no hit tracking (see _apply_row_weights).
+        self.track_hits_for_merge = track_hits_for_merge
+        self.track_hit_rate = whiten or count_gate or track_hits_for_merge
         self.hit_rate_decay = count_gate_decay if count_gate else whiten_decay
         if self.track_hit_rate:
             # Stored in units where 1.0 == "addressed as often as a uniform row of
@@ -1005,6 +1081,12 @@ class AddressedMemory(nn.Module):
 
     def _merge_writeback(self, alias: torch.Tensor) -> None:
         """Copy survivor rows into their merged-away members. Subclass hook."""
+        raise NotImplementedError
+
+    def _merge_writeback_mean(self, alias: torch.Tensor,
+                              hit: torch.Tensor | None) -> None:
+        """Set each survivor to the (hit-weighted) mean of its cluster's rows, then
+        copy that into the members so the table is self-consistent. Subclass hook."""
         raise NotImplementedError
 
     @torch.no_grad()
@@ -1121,6 +1203,10 @@ class AddressedMemory(nn.Module):
             weight = gate if weight is None else weight * gate
         if self.training:
             self._update_hit_rate(shifted)
+        # track_hits_for_merge only: no read weighting, so the forward output is
+        # unchanged and the hit_rate buffer is available for a frequency-weighted merge.
+        if weight is None:
+            return out
         return out * weight.unsqueeze(-1).to(out.dtype)
 
     # -- value-aware row merge (idea 1B) -----------------------------------
@@ -1141,7 +1227,8 @@ class AddressedMemory(nn.Module):
     @torch.no_grad()
     def merge_rows(self, frac: float, metric: str = "cosine", seed: int = 0,
                    feature_override: torch.Tensor | None = None,
-                   keep_mask: torch.Tensor | None = None) -> dict:
+                   keep_mask: torch.Tensor | None = None,
+                   writeback: str = "survivor", cluster: str = "chunk") -> dict:
         """Cluster each head's rows by learned value and alias members onto one
         survivor, shrinking the EFFECTIVE table by ~frac. Returns row stats.
 
@@ -1167,6 +1254,11 @@ class AddressedMemory(nn.Module):
             raise ValueError(f"merge_frac must be in (0, 1), got {frac}")
         if metric not in ("cosine", "lsh"):
             raise ValueError(f"merge_metric must be 'cosine' | 'lsh', got {metric!r}")
+        if writeback not in ("survivor", "mean", "mean_freq"):
+            raise ValueError(
+                f"merge_writeback must be 'survivor' | 'mean' | 'mean_freq', got {writeback!r}")
+        if cluster not in ("chunk", "nn"):
+            raise ValueError(f"merge_cluster must be 'chunk' | 'nn', got {cluster!r}")
         values = feature_override if feature_override is not None else self._value_matrix()
         if values.shape[0] != self.total_rows:
             raise ValueError(
@@ -1191,12 +1283,26 @@ class AddressedMemory(nn.Module):
                 continue
             Vh = values[start : start + N].float()
             hh = hit[start : start + N] if hit is not None else None
-            survivor_local = self._cluster_head(Vh, hh, keep, metric, gen, part)
+            survivor_local = self._cluster_head(Vh, hh, keep, metric, gen, part, cluster)
             alias[start : start + N] = survivor_local.to(device) + start
-        # Copy each survivor's full row into its merged-away members so a save
-        # taken before the next optimizer step is self-consistent. Survivors
-        # alias to themselves, so their rows are unchanged.
-        self._merge_writeback(alias)
+        # Bank the merged rows' learned values into their survivors, then copy each
+        # survivor's full row into its merged-away members so a save taken before the
+        # next optimizer step is self-consistent. "survivor" writeback keeps only the
+        # survivor's row (members' learning discarded); "mean" replaces each survivor
+        # with the PLAIN mean of its cluster; "mean_freq" with the hit-weighted mean
+        # (needs a tracked hit_rate). Survivors alias to themselves, so under "survivor"
+        # their rows are unchanged. Under any mean mode the survivor and its members all
+        # get the same cluster value, so survivor SELECTION does not affect the table.
+        if writeback == "mean_freq":
+            if hit is None:
+                raise ValueError(
+                    "merge_writeback='mean_freq' needs a tracked hit_rate; set "
+                    "track_hits_for_merge=True (or enable whiten/count_gate)")
+            self._merge_writeback_mean(alias, hit)
+        elif writeback == "mean":
+            self._merge_writeback_mean(alias, None)  # plain mean regardless of tracking
+        else:
+            self._merge_writeback(alias)
         self.row_alias.copy_(alias)
         self._merged.fill_(True)
         self._merged_flag = True
@@ -1205,12 +1311,19 @@ class AddressedMemory(nn.Module):
                     effective_rows=int(torch.unique(alias).numel()))
 
     @torch.no_grad()
-    def _cluster_head(self, V, hit, keep, metric, gen, participate=None) -> torch.Tensor:
+    def _cluster_head(self, V, hit, keep, metric, gen, participate=None,
+                      cluster="chunk") -> torch.Tensor:
         """Assign each of V's N rows to one of `keep` survivor rows (local idx).
 
         Survivor per cluster is the highest-hit-rate member (protect the
         well-trained row); ties break to the lowest index. Returns LongTensor[N]
         of survivor local indices (survivors map to themselves).
+
+        cluster : "chunk" | "nn"
+            On the scalable (lsh) path, "chunk" cuts the code-sorted rows into
+            forced equal-size contiguous groups; "nn" instead places the keep-1
+            group boundaries at the least-similar adjacent seams, so groups hold
+            value-similar rows (variable size). No effect on the exact cosine path.
 
         participate : bool[N] or None
             When given, only True rows may cluster/be survivors; False rows map to
@@ -1223,7 +1336,7 @@ class AddressedMemory(nn.Module):
                 return out
             sub_hit = hit[idx] if hit is not None else None
             sub_surv = self._cluster_head(V[idx], sub_hit, min(keep, idx.numel()),
-                                          metric, gen, None)     # local to the subset
+                                          metric, gen, None, cluster)  # local to subset
             out[idx] = idx[sub_surv]                             # map subset survivors back
             return out
         Vn = F.normalize(V, dim=-1)
@@ -1243,7 +1356,20 @@ class AddressedMemory(nn.Module):
         pw = (2 ** torch.arange(b, device=V.device)).long()
         code = (bits * pw).sum(-1)
         order = torch.argsort(code)                     # similar codes adjacent
-        grp_of_sorted = (torch.arange(N, device=V.device) * keep) // N
+        if cluster == "nn":
+            # Place the keep-1 group boundaries at the LEAST-similar adjacent seams
+            # in code-sort order (cut where neighbours diverge) instead of forced
+            # equal-size chunks, so each contiguous group holds value-similar rows.
+            Vs = Vn[order]                              # [N, d] value-sorted
+            adj = (Vs[:-1] * Vs[1:]).sum(-1)           # [N-1] cosine of neighbours
+            ncut = min(keep - 1, adj.numel())
+            boundaries = torch.zeros(N, dtype=torch.long, device=V.device)
+            if ncut > 0:
+                cut_at = torch.topk(adj, ncut, largest=False).indices  # seam btwn i,i+1
+                boundaries[cut_at + 1] = 1              # a new group starts at i+1
+            grp_of_sorted = torch.cumsum(boundaries, 0)  # 0..keep-1, every id present
+        else:
+            grp_of_sorted = (torch.arange(N, device=V.device) * keep) // N
         group = torch.empty(N, dtype=torch.long, device=V.device)
         group[order] = grp_of_sorted                    # keep groups, ~N/keep each
         # survivor per group = argmax score, tie -> lowest index (vectorized)
@@ -1292,6 +1418,25 @@ class MultiHeadEmbedding(AddressedMemory):
 
     def _merge_writeback(self, alias: torch.Tensor) -> None:
         self.embedding.weight.data.copy_(self.embedding.weight.data[alias])
+
+    def _merge_writeback_mean(self, alias: torch.Tensor,
+                              hit: torch.Tensor | None) -> None:
+        # Survivor row := weighted mean of every row aliased onto it, then copy that
+        # into the members. alias[i] is i's survivor; survivors alias to themselves,
+        # so grouping by alias and averaging banks the whole cluster's learning.
+        W = self.embedding.weight.data
+        dev = W.device
+        alias = alias.to(dev)
+        if hit is not None:
+            w = hit.to(dev, W.dtype).clamp_min(0) + 1e-6      # avoid all-zero clusters
+        else:
+            w = torch.ones(W.shape[0], device=dev, dtype=W.dtype)
+        num = torch.zeros_like(W)
+        num.index_add_(0, alias, W * w.unsqueeze(1))          # sum of weighted rows
+        den = torch.zeros(W.shape[0], device=dev, dtype=W.dtype)
+        den.index_add_(0, alias, w)                            # sum of weights
+        mean = num[alias] / den[alias].clamp_min(1e-12).unsqueeze(1)
+        W.copy_(mean)
 
     def forward(self, input_ids: torch.Tensor, query: torch.Tensor | None = None):
         """
@@ -1430,6 +1575,220 @@ class LowRankMemory(AddressedMemory):
         return self._apply_row_weights(out, shifted)
 
 
+class TensorizedNgramMemory(AddressedMemory):
+    r"""Tensorized Engram (TN-gram, arXiv 2606.08347): one rank-R CP tensor whose
+    token-position factors are SHARED across n-gram orders, replacing the big
+    per-order hash tables.
+
+    Idea. An order-n token embedding table R^{V^n x d} is a rank-R CP tensor with
+    per-slot factors A_1..A_N in R^{V x R} and a value factor F in R^{d x R}. The
+    order-n embedding of a window x is a Hadamard product of the factor rows the
+    window selects, contracted through F:
+
+        b_n = (prod_{j > N-n} A_j(x_j))  (Hadamard over R)
+        h_n = s_n * RMSNorm(b_n)  @  F^T          # R -> d
+
+    Lower orders reuse the SAME A factors and contract the unused leading slots
+    with learnable order-absorption vectors w_k (paper: w_k = A_k \hat w_k; here
+    free R-vectors, which span the same row-space and keep R arithmetic clean):
+
+        b_{n<N} = (Hadamard_{k <= N-n} w_k)  (Hadamard)  (prod_{j > N-n} A_j(x_j))
+
+    Heads. The paper has no hash heads; this Engram fills memory_dim with
+    num_heads = n_orders * K constant-row heads of width head_dim. To keep that
+    exact [B,T, n_orders*K, head_dim] layout (so value_proj / gate / short conv /
+    mHC / shared table are all untouched), this module keeps K = n_head_per_ngram
+    INDEPENDENT CP models (own A/F/w/log_scale per head), each emitting one
+    embedding per order. n_orders * K outputs of head_dim reconstruct memory_dim.
+    A factors are shared ACROSS ORDERS within a head, which is the paper's point.
+
+    No rows to gather by flat index, so the AddressedMemory row/whiten/count-gate/
+    merge machinery is inert here: whiten/count_gate/track_hits_for_merge must be
+    off, and _value_matrix / _merge_writeback raise.
+    """
+
+    def __init__(
+        self,
+        vocab_size: int,
+        head_dim: int,
+        d_model: int,
+        rank: int,
+        n_head_per_ngram: int,
+        ngram_orders: List[int],
+        max_ngram_size: int,
+        share_factors: bool = True,
+        **weight_kwargs,
+    ) -> None:
+        K = n_head_per_ngram
+        n_orders = len(ngram_orders)
+        # Dummy per-head vocab of 1 just sets num_heads / embedding_dim / offsets
+        # for the accounting hooks; we never gather by the flat row index.
+        super().__init__([1] * (n_orders * K), head_dim, **weight_kwargs)
+        assert not self.track_hit_rate, (
+            "TensorizedNgramMemory has no addressed rows; whiten/count_gate/"
+            "track_hits_for_merge are meaningless and must be off"
+        )
+        assert rank >= 1, "TensorizedNgramMemory needs cp_rank >= 1"
+        self.V = int(vocab_size)
+        self.K = K
+        self.R = int(rank)
+        self.N = int(max_ngram_size)
+        self.orders = list(ngram_orders)
+        self.n_orders = n_orders
+        # share_factors=True (paper, arXiv 2606.08347): ONE set of token-position
+        # factors A_1..A_N shared across n-gram orders (lower orders reuse the same
+        # A rows, absorbing the unused leading slots with w). False: each order
+        # gets its OWN independent factors (like native Engram's separate per-order
+        # tables) -- the ablation isolating whether cross-order sharing is the
+        # liability. Iso-param note: shared uses N*V*K*R A-params; independent uses
+        # (sum of orders)*V*K*R, so R must be scaled DOWN to match (orders {2,3}:
+        # 5*V*K*R_ind == 3*V*K*R_shared at R_ind = 3/5 * R_shared).
+        self.share_factors = bool(share_factors)
+        if self.share_factors:
+            # A[j] holds all K heads packed as K*R; slot j (0=oldest) maps to shift
+            # N-1-j, so A[N-1] is the current token and the n most-recent slots are
+            # A[N-n:], matching A_{N-n+1..N}.
+            self.A = nn.ModuleList(
+                [nn.Embedding(self.V, K * self.R) for _ in range(self.N)]
+            )
+            # Order-absorption vectors w_k (shared path only): absorb the leading
+            # slots a lower order does not use. Stored FLAT (1D) so the optimizer
+            # split routes it to the no-decay AdamW group (weight-decaying it toward
+            # 0 would suppress the lower-order reads). Viewed to (n_orders,K,R).
+            self.w = nn.Parameter(torch.zeros(n_orders * K * self.R))
+        else:
+            # Independent path: order oi (n = orders[oi]) owns its own n slot
+            # factors, one per USED slot (the n most-recent). No w: nothing is
+            # shared, so there are no leading slots to absorb.
+            self.A_orders = nn.ModuleList(
+                [
+                    nn.ModuleList(
+                        [nn.Embedding(self.V, K * self.R) for _ in range(n)]
+                    )
+                    for n in self.orders
+                ]
+            )
+            self.w = None
+        # Value factor F (explicit; F-absorption into value_proj is a follow-up).
+        # 3D (K,d,R) -> the generic >2D weight-decay AdamW group, like any dense
+        # projection stack (never Muon, which is 2D-only). Shared across orders in
+        # both modes (this ablation isolates the A factors, not F).
+        self.F = nn.Parameter(torch.empty(K, head_dim, self.R))
+        # Per-(order,head) log scale; FLAT 1D so it lands in the no-decay AdamW
+        # group (a 2D tensor would fall into Muon and get orthogonalized).
+        self.log_scale = nn.Parameter(torch.zeros(n_orders * K))
+
+    # -- subclass contract --------------------------------------------------
+    def _a_weights(self) -> List[nn.Parameter]:
+        if self.share_factors:
+            return [emb.weight for emb in self.A]
+        return [emb.weight for order in self.A_orders for emb in order]
+
+    def content_parameters(self) -> List[nn.Parameter]:
+        # Only the gathered A factors get the embedding LR and the 6*N FLOP
+        # exclusion; F/w/log_scale are dense and multiplied, so they belong in the
+        # normal optimizer group (mirrors LowRankMemory.query_proj).
+        return self._a_weights()
+
+    def active_params_per_token(self) -> int:
+        # Distinct A rows gathered per head per token: N in the shared mode (one
+        # per slot, reused by both orders), sum(orders) in the independent mode.
+        n_gathers = self.N if self.share_factors else sum(self.orders)
+        return self.K * n_gathers * self.R
+
+    def read_flops_per_token(self) -> int:
+        # The F contraction dominates: per order, per head, a (d x R) matvec.
+        return 2 * self.K * self.n_orders * self.embedding_dim * self.R
+
+    def reset_content(self, ablation_mode: str) -> None:
+        for w in self._a_weights():
+            _init_addressed_rows(w, ablation_mode, std=1.0)
+        # F ~ N(0, R^-0.5): fan-in R keeps the read at unit scale (like w_out).
+        nn.init.normal_(self.F, mean=0.0, std=self.R**-0.5)
+        if self.w is not None:
+            # w multiplies like an extra A row, so it must NOT be zero (that would
+            # zero every lower-order read); unit normal matches an A row's scale.
+            nn.init.normal_(self.w, mean=0.0, std=1.0)
+        nn.init.zeros_(self.log_scale)
+        if ablation_mode != "none":
+            # randomize/uniform freeze the payload; freeze the dense factors too so
+            # the read is a fixed random function of the address.
+            self.F.requires_grad_(False)
+            if self.w is not None:
+                self.w.requires_grad_(False)
+            self.log_scale.requires_grad_(False)
+
+    def _value_matrix(self) -> torch.Tensor:
+        raise NotImplementedError("merge is undefined for a factorized CP table")
+
+    def _merge_writeback(self, alias: torch.Tensor) -> None:
+        raise NotImplementedError("merge is undefined for a factorized CP table")
+
+    def _merge_writeback_mean(self, alias, hit) -> None:
+        raise NotImplementedError("merge is undefined for a factorized CP table")
+
+    def split_key_value(self, rows: torch.Tensor):
+        """No separate key: CP rows carry payload only."""
+        return rows, None
+
+    def forward(self, windows: torch.Tensor, query: torch.Tensor | None = None):
+        """
+        Parameters
+        ----------
+        windows : torch.Tensor, shape [B, T, N], int64
+            Compressed window tokens; ``windows[..., k]`` is the token at t-k
+            (from NgramHasher.compressed_windows).
+        query : unused (shared call signature).
+
+        Returns
+        -------
+        torch.Tensor, shape [B, T, n_orders * K, head_dim].
+        """
+        B, T, N = windows.shape
+        assert N == self.N, f"expected {self.N} window slots, got {N}"
+        # log_scale views back to (n_orders, K); stored flat for the optimizer
+        # split (see __init__).
+        log_scale = self.log_scale.view(self.n_orders, self.K)
+        if self.share_factors:
+            w = self.w.view(self.n_orders, self.K, self.R)
+            # a[j] = A_{j+1}(x at slot j), slot j maps to shift N-1-j.
+            a = [
+                self.A[j](windows[..., self.N - 1 - j]).view(B, T, self.K, self.R)
+                for j in range(self.N)
+            ]
+        outs = []
+        for oi, n in enumerate(self.orders):
+            if self.share_factors:
+                used = a[self.N - n:]  # the n most-recent slots
+                b = used[0]
+                for factor in used[1:]:
+                    b = b * factor  # Hadamard over R
+                # absorb the N-n unused leading slots with the order vector
+                for _ in range(self.N - n):
+                    b = b * w[oi]
+            else:
+                # Independent: order oi owns n factors, one per used slot. Slot s
+                # (0=oldest USED) reads shift n-1-s, i.e. window slot N-1-(n-1-s).
+                order_A = self.A_orders[oi]
+                b = None
+                for s in range(n):
+                    shift = n - 1 - s
+                    fac = order_A[s](
+                        windows[..., self.N - 1 - shift]
+                    ).view(B, T, self.K, self.R)
+                    b = fac if b is None else b * fac
+            # Stabilize in fp32: the N-factor Hadamard can under/overflow in bf16.
+            b = F.rms_norm(b.float(), (self.R,))
+            scale = torch.exp(log_scale[oi].float()).view(1, 1, self.K, 1)
+            e = (b * scale).to(self.F.dtype)
+            h = torch.einsum("btkr,kdr->btkd", e, self.F)  # [B, T, K, head_dim]
+            outs.append(h)
+        # order-major: [B, T, n_orders*K, head_dim]
+        return torch.stack(outs, dim=2).reshape(
+            B, T, self.n_orders * self.K, self.embedding_dim
+        )
+
+
 def collect_engram_aux_loss(model):
     """Sum the per-layer discretizer auxiliary loss from the last forward.
 
@@ -1470,12 +1829,16 @@ def _init_addressed_rows(
 
 
 def build_memory_table(
-    cfg: EngramConfig, head_vocab_sizes: List[int], head_dim: int, d_model: int
+    cfg: EngramConfig, head_vocab_sizes: List[int], head_dim: int, d_model: int,
+    vocab_size: int | None = None,
 ) -> AddressedMemory:
-    """The Engram memory table for this config: constant rows, or rank-k maps.
+    """The Engram memory table for this config: constant rows, rank-k maps, or a
+    tensorized (CP-factorized) n-gram table.
 
     One factory so the per-layer table (Engram.__init__) and the shared table
-    (GPT._build_shared_engram_memory) cannot drift apart.
+    (GPT._build_shared_engram_memory) cannot drift apart. ``vocab_size`` is the
+    compressed alphabet size a token address indexes; required for the tngram
+    table (which indexes window tokens directly), ignored otherwise.
     """
     weight_kwargs = dict(
         whiten=cfg.readout_whiten,
@@ -1487,10 +1850,35 @@ def build_memory_table(
         count_gate_fourier=cfg.count_gate_fourier,
         count_gate_fourier_max_u=cfg.count_gate_fourier_max_u,
         count_gate_decouple=cfg.count_gate_decouple,
+        # A frequency-weighted merge needs hit counts, but must not change the read;
+        # this tracks the buffer with zero read weighting (only when whiten/count_gate
+        # are off, which would otherwise already track and DO weight the read).
+        track_hits_for_merge=(cfg.merge_writeback == "mean_freq"),
         # Heads are laid out order-major (all of order 2, then all of order 3),
         # so one n-gram order is a contiguous run of n_head_per_ngram heads.
         heads_per_group=cfg.n_head_per_ngram,
     )
+    if cfg.value_table == "tngram":
+        assert cfg.value_rank == 0 and cfg.key_dim == 0, (
+            "value_table='tngram' is incompatible with value_rank>0 / key_dim>0"
+        )
+        assert cfg.address_source == "tokens", (
+            "value_table='tngram' indexes window tokens directly, so it needs "
+            f"address_source='tokens', got {cfg.address_source!r}"
+        )
+        assert cfg.cp_rank >= 1, "value_table='tngram' needs cp_rank >= 1"
+        assert vocab_size is not None, "tngram table needs vocab_size"
+        return TensorizedNgramMemory(
+            vocab_size=vocab_size,
+            head_dim=head_dim,
+            d_model=d_model,
+            rank=cfg.cp_rank,
+            n_head_per_ngram=cfg.n_head_per_ngram,
+            ngram_orders=ngram_orders(cfg.max_ngram_size),
+            max_ngram_size=cfg.max_ngram_size,
+            share_factors=cfg.tngram_share_factors,
+            **weight_kwargs,
+        )
     if cfg.value_rank <= 0:
         return MultiHeadEmbedding(
             list_of_N=head_vocab_sizes,
@@ -1771,7 +2159,8 @@ class Engram(nn.Module):
             self._shared_embedding = [shared_embedding]
         else:
             self.multi_head_embedding = build_memory_table(
-                cfg, head_vocab_sizes, head_dim, d_model
+                cfg, head_vocab_sizes, head_dim, d_model,
+                vocab_size=self.hasher.vocab_size,
             )
 
         # --- Shared projection + output conv (both paths) ---
@@ -1832,6 +2221,20 @@ class Engram(nn.Module):
         hidden: torch.Tensor | None = None,
     ) -> "Tuple[torch.Tensor, torch.Tensor | None]":
         """Returns (values, keys). keys is None unless EngramConfig.key_dim > 0."""
+        table = self.memory_table
+        if isinstance(table, TensorizedNgramMemory):
+            # TN-gram reads the raw compressed window token ids directly (one
+            # CP factor lookup per n-gram slot), NOT hash indices — skip the
+            # whole hash path. _align_embeddings_to_hidden trims afterwards.
+            windows = self.hasher.compressed_windows(
+                input_ids, compressed_input_ids=compressed_input_ids
+            )
+            rows = table(windows)
+            values, keys = table.split_key_value(rows)
+            return (
+                values.flatten(start_dim=-2),
+                None if keys is None else keys.flatten(start_dim=-2),
+            )
         if self.address_source == "hybrid":
             assert hidden is not None, "hybrid addressing needs the hidden state"
             tok = compressed_input_ids if compressed_input_ids is not None else input_ids

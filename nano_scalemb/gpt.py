@@ -485,7 +485,8 @@ class GPT(nn.Module):
             for head_idx in range(engram_cfg.n_head_per_ngram)
         ]
         return build_memory_table(
-            engram_cfg, head_vocab_sizes, head_dim, config.n_embd
+            engram_cfg, head_vocab_sizes, head_dim, config.n_embd,
+            vocab_size=hasher.vocab_size,
         )
 
     def _engram_memory_tables(self):
