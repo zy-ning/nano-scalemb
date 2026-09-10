@@ -210,6 +210,22 @@ class EngramConfig:
     # A costs sum(orders)/max_ngram_size more A-params at equal R, so match by
     # scaling R down (orders {2,3}: cp_rank=6 independent == cp_rank=10 shared).
     tngram_share_factors: bool = True
+    # tngram only: readout of the value factor F. The paper (arXiv 2606.08347,
+    # Eq. 8) absorbs F into the value projection: the CP token-space coordinates
+    # e_n in R^R are CONCATENATED across orders/heads and a SINGLE learned matrix
+    # M_V = F^T W_V maps the whole (n_orders*K*R) vector to d_model. There is no
+    # per-head partition: every output dim sees every CP coordinate.
+    #   False (default, original port): keep an explicit per-head F in (K,d,R) and
+    #     contract each head to its own head_dim slice, so the read tiles the
+    #     [B,T,16,80] native layout byte-for-byte. This imposes 16 ISOLATED rank-R
+    #     bottlenecks (each 80-dim head reconstructed from only its own R coords)
+    #     that the paper never has -- the value_proj sees the CP signal only after
+    #     16 independent squeezes.
+    #   True (paper-faithful): drop F; emit the raw CP coordinates
+    #     [B,T, n_orders*K, R] and let value_proj (= M_V) mix ALL coordinates into
+    #     d_model globally. Removes the per-head rank cap; the Engram read width
+    #     becomes n_orders*K*R instead of memory_dim.
+    tngram_global_readout: bool = False
     # --- Separate key and value per row ---------------------------------------
     # Today one stored vector serves BOTH roles: the read is projected once by
     # stream_key_proj to compute the relevance gate and once by value_proj to
@@ -1617,13 +1633,20 @@ class TensorizedNgramMemory(AddressedMemory):
         ngram_orders: List[int],
         max_ngram_size: int,
         share_factors: bool = True,
+        global_readout: bool = False,
         **weight_kwargs,
     ) -> None:
         K = n_head_per_ngram
         n_orders = len(ngram_orders)
+        self.global_readout = bool(global_readout)
+        # In global-readout mode there is no per-head F contraction: the module
+        # emits the raw CP coordinates (width R per head) and the Engram's
+        # value_proj absorbs F (paper Eq. 8). embedding_dim is then R, not
+        # head_dim, and n_orders*K*R (not memory_dim) is the read width.
+        emit_dim = rank if self.global_readout else head_dim
         # Dummy per-head vocab of 1 just sets num_heads / embedding_dim / offsets
         # for the accounting hooks; we never gather by the flat row index.
-        super().__init__([1] * (n_orders * K), head_dim, **weight_kwargs)
+        super().__init__([1] * (n_orders * K), emit_dim, **weight_kwargs)
         assert not self.track_hit_rate, (
             "TensorizedNgramMemory has no addressed rows; whiten/count_gate/"
             "track_hits_for_merge are meaningless and must be off"
@@ -1669,11 +1692,15 @@ class TensorizedNgramMemory(AddressedMemory):
                 ]
             )
             self.w = None
-        # Value factor F (explicit; F-absorption into value_proj is a follow-up).
-        # 3D (K,d,R) -> the generic >2D weight-decay AdamW group, like any dense
-        # projection stack (never Muon, which is 2D-only). Shared across orders in
-        # both modes (this ablation isolates the A factors, not F).
-        self.F = nn.Parameter(torch.empty(K, head_dim, self.R))
+        # Value factor F. In per-head mode (default) F is explicit: (K,d,R) 3D
+        # -> generic >2D weight-decay AdamW group, contracting each head to its
+        # own head_dim slice. In global-readout mode (paper Eq. 8) F is ABSORBED
+        # into the Engram value_proj (M_V = F^T W_V), so there is no F here: the
+        # module emits the raw R coordinates per head and value_proj mixes them.
+        if self.global_readout:
+            self.F = None
+        else:
+            self.F = nn.Parameter(torch.empty(K, head_dim, self.R))
         # Per-(order,head) log scale; FLAT 1D so it lands in the no-decay AdamW
         # group (a 2D tensor would fall into Muon and get orthogonalized).
         self.log_scale = nn.Parameter(torch.zeros(n_orders * K))
@@ -1697,14 +1724,21 @@ class TensorizedNgramMemory(AddressedMemory):
         return self.K * n_gathers * self.R
 
     def read_flops_per_token(self) -> int:
-        # The F contraction dominates: per order, per head, a (d x R) matvec.
+        # Per-head mode: the F contraction dominates -- per order, per head, a
+        # (head_dim x R) matvec. Global-readout mode has no F here (it moved into
+        # value_proj, counted with the dense projections), so only the CP
+        # coordinate production remains: ~2 * K * sum(orders) * R Hadamard muls.
+        if self.global_readout:
+            return 2 * self.K * sum(self.orders) * self.R
         return 2 * self.K * self.n_orders * self.embedding_dim * self.R
 
     def reset_content(self, ablation_mode: str) -> None:
         for w in self._a_weights():
             _init_addressed_rows(w, ablation_mode, std=1.0)
         # F ~ N(0, R^-0.5): fan-in R keeps the read at unit scale (like w_out).
-        nn.init.normal_(self.F, mean=0.0, std=self.R**-0.5)
+        # Global-readout mode has no F (absorbed into value_proj).
+        if self.F is not None:
+            nn.init.normal_(self.F, mean=0.0, std=self.R**-0.5)
         if self.w is not None:
             # w multiplies like an extra A row, so it must NOT be zero (that would
             # zero every lower-order read); unit normal matches an A row's scale.
@@ -1713,7 +1747,8 @@ class TensorizedNgramMemory(AddressedMemory):
         if ablation_mode != "none":
             # randomize/uniform freeze the payload; freeze the dense factors too so
             # the read is a fixed random function of the address.
-            self.F.requires_grad_(False)
+            if self.F is not None:
+                self.F.requires_grad_(False)
             if self.w is not None:
                 self.w.requires_grad_(False)
             self.log_scale.requires_grad_(False)
@@ -1780,10 +1815,17 @@ class TensorizedNgramMemory(AddressedMemory):
             # Stabilize in fp32: the N-factor Hadamard can under/overflow in bf16.
             b = F.rms_norm(b.float(), (self.R,))
             scale = torch.exp(log_scale[oi].float()).view(1, 1, self.K, 1)
-            e = (b * scale).to(self.F.dtype)
-            h = torch.einsum("btkr,kdr->btkd", e, self.F)  # [B, T, K, head_dim]
-            outs.append(h)
-        # order-major: [B, T, n_orders*K, head_dim]
+            e = b * scale  # [B, T, K, R], fp32
+            if self.global_readout:
+                # Emit the raw CP coordinates; value_proj (= M_V, absorbing F)
+                # mixes ALL of them into d_model. No per-head contraction. Cast
+                # back to the factor param dtype (bf16 in training) for value_proj.
+                outs.append(e.to(self._a_weights()[0].dtype))
+            else:
+                e = e.to(self.F.dtype)
+                h = torch.einsum("btkr,kdr->btkd", e, self.F)  # [B, T, K, head_dim]
+                outs.append(h)
+        # order-major: [B, T, n_orders*K, emit_dim] (emit_dim = R if global else head_dim)
         return torch.stack(outs, dim=2).reshape(
             B, T, self.n_orders * self.K, self.embedding_dim
         )
@@ -1877,6 +1919,7 @@ def build_memory_table(
             ngram_orders=ngram_orders(cfg.max_ngram_size),
             max_ngram_size=cfg.max_ngram_size,
             share_factors=cfg.tngram_share_factors,
+            global_readout=getattr(cfg, "tngram_global_readout", False),
             **weight_kwargs,
         )
     if cfg.value_rank <= 0:
@@ -2085,7 +2128,15 @@ class Engram(nn.Module):
         )
         head_dim = cfg.memory_dim // num_heads
 
-        engram_hidden_size = cfg.memory_dim  # = num_heads * head_dim
+        # TN-gram global-readout: the CP table emits raw coordinates (R per head),
+        # not head_dim, so the Engram read width is num_heads*R and value_proj
+        # (= the paper's M_V, absorbing F) maps that whole vector to d_model.
+        tngram_global = (
+            cfg.value_table == "tngram" and getattr(cfg, "tngram_global_readout", False)
+        )
+        engram_hidden_size = (
+            num_heads * cfg.cp_rank if tngram_global else cfg.memory_dim
+        )  # per-head mode: = num_heads * head_dim
         # With key_dim > 0 the gate is computed from the rows' own keys, which are
         # a narrower tensor than the payload, so its projection is sized to that.
         # key_dim=0 keeps the paper's shape: gate and payload from the same read.
@@ -2154,7 +2205,11 @@ class Engram(nn.Module):
             self.multi_head_embedding = None
         elif shared_embedding is not None:
             assert cfg.share_memory, "shared_embedding requires share_memory"
-            assert shared_embedding.embedding_dim == head_dim
+            # tngram global-readout emits R per head (not head_dim); every other
+            # table emits head_dim.
+            assert shared_embedding.embedding_dim == (
+                cfg.cp_rank if tngram_global else head_dim
+            )
             self.multi_head_embedding = None
             self._shared_embedding = [shared_embedding]
         else:

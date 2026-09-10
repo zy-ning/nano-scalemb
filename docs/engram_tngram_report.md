@@ -90,12 +90,44 @@ Hadamard/RMSNorm/einsum is not a regression, even at R=400.
    R=10) lies **on top of** the shared curve the whole way (end +0.0004). Untying the orders
    buys nothing → the paper's core design choice is not the liability.
 
+## Global readout (paper Eq. 8): tested, also a null
+
+A full re-read of the paper (arxiv.org/html/2606.08347v1) surfaced the one genuine
+*implementation* divergence from our port. The paper does **not** partition the read per head:
+it concatenates all `(N−1)·R` CP coordinates and maps the whole vector to `d_model` with a
+**single** learned `M_V = Fᵀ W_V`. Our port instead forced the CP read into the native
+`[B,T,16,80]` layout with a per-head `F ∈ (K,80,R)`, imposing **16 isolated rank-R
+bottlenecks** the paper never has. Since the full-rank R=80 probe had already shown rank was
+not the per-head binding constraint, the *partition* was the prime suspect for the gap.
+
+`tngram_global_readout` (`--engram-tngram-global-readout`, default off) drops the explicit F,
+emits the raw CP coordinates `[B,T,n_orders·K,R]`, and lets `value_proj` be the paper's global
+`M_V` (Engram read width `n_orders·K·R` instead of `memory_dim`). At R=80 the value_proj is
+1280×1280 either way, so global R=80 is **iso-param** with per-head R=80 (both 963.8–963.9M) —
+a clean isolation of the readout, holding the A-budget and projection size fixed.
+
+| step | global R=80 | per-head R=80 | native slot15 |
+|---|---|---|---|
+| 500 | 0.960019 | 0.9552 | 0.9492 |
+| 1000 | 0.901156 | 0.8961 | 0.8894 |
+| 2000 | 0.853830 | 0.8509 | 0.8440 |
+| 3000 | 0.801864 | 0.8002 | 0.7933 |
+| **end** | **0.772351** | **0.770665** | **0.76486** |
+
+**Null.** Global readout finishes **+0.0017 worse** than per-head R=80 (and +0.0075 above
+native slot15). The gap narrows over training (+0.005 → +0.0017 — the global M_V has to *learn*
+to absorb F, which the explicit per-head F gets for free at init) but never crosses over.
+Throughput identical (~262k tok/s, mfu 8.2). So the per-head partition was **not** the handicap:
+the paper's own faithful readout gives no improvement at our scale. The only remaining untested
+paper divergence is **N=5 depth** (orders {2,3,4,5} vs our {2,3}).
+
 ## Conclusion
 
 At our scale, **CP factorization is a strictly weaker value representation than the native
 per-order hash table**, at every budget from 0.6% to 19.4% of the model. It is not a starved-rank
-artifact (full-rank R=80 ≈ rank-limited R=10), not init, and not cross-order sharing (independent
-≈ shared). The native table's explicit per-order capacity simply beats the shared low-rank CP
+artifact (full-rank R=80 ≈ rank-limited R=10), not init, not cross-order sharing (independent
+≈ shared), and **not the per-head output partition** (paper-faithful global M_V readout ≈ per-head,
++0.0017 worse). The native table's explicit per-order capacity simply beats the shared low-rank CP
 structure — even when CP is given 32× the parameters, into the paper's own 20%-of-model regime.
 
 This does **not** contradict the paper: (1) the paper's headline is a **CORE + parameter-count**

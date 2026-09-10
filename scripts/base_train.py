@@ -241,6 +241,14 @@ parser.add_argument(
     "cp_rank down (orders {2,3}: --engram-cp-rank=6 independent == 10 shared)",
 )
 parser.add_argument(
+    "--engram-tngram-global-readout",
+    action="store_true",
+    help="tngram only: paper-faithful readout (arXiv 2606.08347 Eq. 8). Drop the "
+    "explicit per-head F and emit the raw CP coordinates; the Engram value_proj "
+    "(= M_V, absorbing F) mixes ALL n_orders*K*R coords into d_model globally, "
+    "removing the 16 isolated per-head rank-R bottlenecks the default port imposes.",
+)
+parser.add_argument(
     "--engram-value-query-dim",
     type=int,
     default=128,
@@ -764,6 +772,8 @@ def build_engram_config() -> EngramConfig | None:
             raise ValueError("--engram-cp-rank requires --engram")
         if args.engram_tngram_independent_factors:
             raise ValueError("--engram-tngram-independent-factors requires --engram")
+        if args.engram_tngram_global_readout:
+            raise ValueError("--engram-tngram-global-readout requires --engram")
         return None
     if args.engram_count_gate_decouple and not args.engram_count_gate:
         raise ValueError(
@@ -946,6 +956,11 @@ def build_engram_config() -> EngramConfig | None:
             "--engram-tngram-independent-factors only applies to "
             "--engram-value-table=tngram"
         )
+    elif args.engram_tngram_global_readout:
+        raise ValueError(
+            "--engram-tngram-global-readout only applies to "
+            "--engram-value-table=tngram"
+        )
     layer_ids = tuple(
         int(layer.strip()) for layer in args.engram_layers.split(",") if layer.strip()
     )
@@ -992,6 +1007,7 @@ def build_engram_config() -> EngramConfig | None:
         value_table=args.engram_value_table,
         cp_rank=args.engram_cp_rank,
         tngram_share_factors=not args.engram_tngram_independent_factors,
+        tngram_global_readout=args.engram_tngram_global_readout,
         key_dim=args.engram_key_dim,
         count_gate=args.engram_count_gate,
         count_gate_decay=args.engram_count_gate_decay,
