@@ -194,11 +194,26 @@ an intrinsic weakness of the CP factorization.** Native's apparent "win" through
 above was an artifact of running CP far below its operating regime — the 32k tokenizer forces
 R/V ≪ 1, so CP never had a fair test until now.
 
+### Crossover curve (R/V governs the sign of the gap)
+
+The within-cell ordering is monotone in R/V, and **native sits between the two CP points** — R/V≈1
+beats native, R/V≈0.25 loses to it:
+
+| vocab | N | arm | R/V | min bpb | Δ vs native |
+|---|---|---|---|---|---|
+| 1024 | 5 | CP R=1024 | ≈1.00 | 0.807646 | **−0.0020 (CP wins)** |
+| 1024 | 5 | native | — | 0.809668 | — |
+| 1024 | 5 | CP R=256 | ≈0.25 | 0.810719 | **+0.0010 (CP loses)** |
+
+For contrast, the 32k-vocab runs (R/V ≈ 0.0004–0.017) had CP losing by **+0.006**. So as R/V climbs
+0.002 → 0.25 → 1.0, the CP−native gap moves +0.006 → +0.001 → −0.002: the sign flips near R/V ≈ 0.3,
+consistent with the paper losing BPB at R/V ≈ 0.22 and tying/winning at R/V ≈ 1.
+
 ### Remaining sweep (in progress)
 
-Mapping the crossover curve: **vocab 1024** R=256 (R/V ≈ 0.25) + N=3; **vocab 4096** R∈{4096, 1024}
-(R/V ∈ {1, 0.25}) × N∈{3, 5}. Expectation from the trend: R/V ≈ 1 cells tie-or-win, R/V ≈ 0.25 cells
-sit near/just-below the paper's own losing point. Table + verdict to be filled in as arms complete.
+Still filling in the curve: **vocab 1024** N=3 (native/R1024/R256, running now) and **vocab 4096**
+R∈{4096, 1024} (R/V ∈ {1, 0.25}) × N∈{3, 5}. These test whether the crossover holds at N=3 and at a
+larger (4096) vocab. Table above will be extended as arms complete.
 
 ## Conclusion (revised — the negative was an R/V artifact)
 
