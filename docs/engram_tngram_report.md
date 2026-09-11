@@ -121,13 +121,44 @@ Throughput identical (~262k tok/s, mfu 8.2). So the per-head partition was **not
 the paper's own faithful readout gives no improvement at our scale. The only remaining untested
 paper divergence is **N=5 depth** (orders {2,3,4,5} vs our {2,3}).
 
+## N=5 depth (paper's n-gram order): tested, also a null
+
+The last remaining paper divergence. The paper uses **N=5** (orders {2,3,4,5}); every run above
+used **N=3** (orders {2,3}). Theorem 4.1's shared-factor benefit is strongest with *more* orders
+to share across, so N=3 could simply be too shallow to show the paper's effect. N=5 changes the
+head geometry: `n_orders=4`, `num_heads = 4·K = 32`, `head_dim = 40` (memory_dim=1280 fixed);
+shared A-params = `5·V·K·R = 947,440·R`. Two arms (per-head readout, the stronger config):
+
+- **R=48** → 45.5M A-params — **iso-param** with the best prior N=3 CP (per-head R=80, 45.5M,
+  0.770665): same param budget, N=3→N=5. Clean depth isolation.
+- **R=80** → 75.8M A-params — deeper *and* bigger.
+
+| step | N=5 R=48 | N=5 R=80 | N=3 per-head R=80 | native slot15 |
+|---|---|---|---|---|
+| 500 | 0.958798 | 0.956988 | 0.9552 | 0.9492 |
+| 1000 | 0.899616 | 0.896485 | 0.8961 | 0.8894 |
+| 1500 | 0.872857 | 0.870842 | 0.8708 | 0.8632 |
+| 2000 | 0.853760 | 0.851663 | 0.8509 | 0.8440 |
+| 2500 | 0.825888 | 0.824591 | 0.8246 | — |
+| 3000 | 0.801124 | 0.800425 | 0.8002 | 0.7933 |
+| 3500 | 0.779515 | 0.778866 | — | — |
+| **end** | **0.771438** | **0.770880** | **0.770665** | **0.76486** |
+
+**Null.** Iso-param N=5 R=48 finishes **+0.00077 worse** than N=3 R=80; even N=5 R=80 (deeper AND
+75.8M A-params) is **+0.00022 worse**. Both track just above the N=3 R=80 anchor the whole way and
+never cross below it, and both remain +0.006 above native slot15. Adding the paper's extra n-gram
+orders {4,5} does not rescue CP at our scale — depth was not the missing lever. Throughput healthy
+throughout (~258–262k tok/s, mfu ~8.1). This was the **last untested divergence** from the paper's
+config; with it null, every axis has been closed.
+
 ## Conclusion
 
 At our scale, **CP factorization is a strictly weaker value representation than the native
 per-order hash table**, at every budget from 0.6% to 19.4% of the model. It is not a starved-rank
 artifact (full-rank R=80 ≈ rank-limited R=10), not init, not cross-order sharing (independent
-≈ shared), and **not the per-head output partition** (paper-faithful global M_V readout ≈ per-head,
-+0.0017 worse). The native table's explicit per-order capacity simply beats the shared low-rank CP
+≈ shared), **not the per-head output partition** (paper-faithful global M_V readout ≈ per-head,
++0.0017 worse), and **not n-gram depth** (N=5 orders {2,3,4,5} ≈ N=3 orders {2,3} at iso-param,
++0.00077 worse). The native table's explicit per-order capacity simply beats the shared low-rank CP
 structure — even when CP is given 32× the parameters, into the paper's own 20%-of-model regime.
 
 This does **not** contradict the paper: (1) the paper's headline is a **CORE + parameter-count**
@@ -138,5 +169,5 @@ regimes. **Line closed.**
 
 Code and tests remain on the branch (`test_tngram.py` 11/11, `test_tngram_e2e.py` 4/4, 191
 existing engram+merge tests green) for reproducibility; the `tngram` value table is opt-in and
-defaults untouched. An N=5 (paper's n-gram-depth sweet spot; ours is N=3) confirm arm was
-considered but not run, since R=400 stalled clearly short of parity.
+defaults untouched. Every divergence from the paper's config has now been tested — rank, budget,
+init, cross-order sharing, global readout, and N=5 depth — and native wins on BPB at every one.
