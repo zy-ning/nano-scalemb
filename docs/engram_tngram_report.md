@@ -211,6 +211,8 @@ across both n-gram depths (N=3, N=5) and both vocab sizes (1024, 4096):
 | 4096 | 5 | CP R=4096 | ≈1.00 | 0.783180 | **−0.0058 (CP wins)** |
 | 4096 | 5 | native | — | 0.788987 | — |
 | 4096 | 5 | CP R=1024 | ≈0.25 | 0.789941 | **+0.0009 (CP loses)** |
+| 4096 | 3 | CP R=4096 | ≈1.00 | 0.784847 | **−0.0056 (CP wins)** |
+| 4096 | 3 | native | — | 0.790432 | — |
 
 For contrast, the 32k-vocab runs (R/V ≈ 0.0004–0.017) had CP losing by **+0.006**. So as R/V climbs
 0.002 → 0.25 → 1.0, the CP−native gap moves +0.006 → +0.001 → −0.002: the sign flips near R/V ≈ 0.3,
@@ -220,9 +222,10 @@ widens, exactly the direction the paper's larger-vocab operating point predicts.
 
 ### Remaining sweep (in progress)
 
-One cell left: **vocab 4096, N=3** (R4096 running, R1024 pending). Every completed cell — vocab
-1024 N∈{3,5}, vocab 4096 N=5 — reproduces the crossover, so N=3 at vocab 4096 is expected to as
-well. Table above will be extended when it lands.
+The vocab-4096 N=3 R/V≈1 arm reproduces the crossover (**−0.0056**, matching the vocab-4096 N=5 win);
+its R/V≈0.25 arm is still running. A follow-up sweep adds the **R/V≈0.5 midpoint** (R=V/2: R=512 at
+vocab 1024, R=2048 at vocab 4096) to all four cells, pinning down where the sign actually flips.
+Table above will be extended as those arms land.
 
 ## Conclusion (revised — the negative was an R/V artifact)
 
