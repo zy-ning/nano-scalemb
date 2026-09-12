@@ -196,24 +196,33 @@ R/V ≪ 1, so CP never had a fair test until now.
 
 ### Crossover curve (R/V governs the sign of the gap)
 
-The within-cell ordering is monotone in R/V, and **native sits between the two CP points** — R/V≈1
-beats native, R/V≈0.25 loses to it:
+The within-cell ordering is monotone in R/V in **every cell measured**, and **native always sits
+between the two CP points** — R/V≈1 beats native, R/V≈0.25 loses to it. The crossover reproduces
+across both n-gram depths (N=3, N=5) and both vocab sizes (1024, 4096):
 
 | vocab | N | arm | R/V | min bpb | Δ vs native |
 |---|---|---|---|---|---|
 | 1024 | 5 | CP R=1024 | ≈1.00 | 0.807646 | **−0.0020 (CP wins)** |
 | 1024 | 5 | native | — | 0.809668 | — |
 | 1024 | 5 | CP R=256 | ≈0.25 | 0.810719 | **+0.0010 (CP loses)** |
+| 1024 | 3 | CP R=1024 | ≈1.00 | 0.807715 | **−0.0012 (CP wins)** |
+| 1024 | 3 | native | — | 0.808901 | — |
+| 1024 | 3 | CP R=256 | ≈0.25 | 0.810984 | **+0.0021 (CP loses)** |
+| 4096 | 5 | CP R=4096 | ≈1.00 | 0.783180 | **−0.0058 (CP wins)** |
+| 4096 | 5 | native | — | 0.788987 | — |
+| 4096 | 5 | CP R=1024 | ≈0.25 | 0.789941 | **+0.0009 (CP loses)** |
 
 For contrast, the 32k-vocab runs (R/V ≈ 0.0004–0.017) had CP losing by **+0.006**. So as R/V climbs
 0.002 → 0.25 → 1.0, the CP−native gap moves +0.006 → +0.001 → −0.002: the sign flips near R/V ≈ 0.3,
-consistent with the paper losing BPB at R/V ≈ 0.22 and tying/winning at R/V ≈ 1.
+consistent with the paper losing BPB at R/V ≈ 0.22 and tying/winning at R/V ≈ 1. The **vocab-4096
+N=5** cell shows the **largest R/V≈1 win yet (−0.0058)** — as vocab grows the R/V≈1 CP advantage
+widens, exactly the direction the paper's larger-vocab operating point predicts.
 
 ### Remaining sweep (in progress)
 
-Still filling in the curve: **vocab 1024** N=3 (native/R1024/R256, running now) and **vocab 4096**
-R∈{4096, 1024} (R/V ∈ {1, 0.25}) × N∈{3, 5}. These test whether the crossover holds at N=3 and at a
-larger (4096) vocab. Table above will be extended as arms complete.
+One cell left: **vocab 4096, N=3** (R4096 running, R1024 pending). Every completed cell — vocab
+1024 N∈{3,5}, vocab 4096 N=5 — reproduces the crossover, so N=3 at vocab 4096 is expected to as
+well. Table above will be extended when it lands.
 
 ## Conclusion (revised — the negative was an R/V artifact)
 
