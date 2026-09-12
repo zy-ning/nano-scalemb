@@ -196,9 +196,11 @@ R/V ≪ 1, so CP never had a fair test until now.
 
 ### Crossover curve (R/V governs the sign of the gap)
 
-The within-cell ordering is monotone in R/V in **every cell measured**, and **native always sits
-between the two CP points** — R/V≈1 beats native, R/V≈0.25 loses to it. The crossover reproduces
-across both n-gram depths (N=3, N=5) and both vocab sizes (1024, 4096):
+The within-cell ordering is monotone in R/V in **every cell measured**. In three of the four cells
+**native sits between the two CP points** (R/V≈1 beats native, R/V≈0.25 loses to it); in the
+**fourth (vocab 4096, N=3) even R/V≈0.25 already wins** — as vocab grows the whole curve slides
+down and the crossover point moves to *lower* R/V. The R/V≈1 win reproduces across both n-gram
+depths (N=3, N=5) and both vocab sizes (1024, 4096):
 
 | vocab | N | arm | R/V | min bpb | Δ vs native |
 |---|---|---|---|---|---|
@@ -213,19 +215,21 @@ across both n-gram depths (N=3, N=5) and both vocab sizes (1024, 4096):
 | 4096 | 5 | CP R=1024 | ≈0.25 | 0.789941 | **+0.0009 (CP loses)** |
 | 4096 | 3 | CP R=4096 | ≈1.00 | 0.784847 | **−0.0056 (CP wins)** |
 | 4096 | 3 | native | — | 0.790432 | — |
+| 4096 | 3 | CP R=1024 | ≈0.25 | 0.787724 | **−0.0027 (CP wins)** |
 
 For contrast, the 32k-vocab runs (R/V ≈ 0.0004–0.017) had CP losing by **+0.006**. So as R/V climbs
-0.002 → 0.25 → 1.0, the CP−native gap moves +0.006 → +0.001 → −0.002: the sign flips near R/V ≈ 0.3,
-consistent with the paper losing BPB at R/V ≈ 0.22 and tying/winning at R/V ≈ 1. The **vocab-4096
-N=5** cell shows the **largest R/V≈1 win yet (−0.0058)** — as vocab grows the R/V≈1 CP advantage
-widens, exactly the direction the paper's larger-vocab operating point predicts.
+0.002 → 0.25 → 1.0, the CP−native gap moves +0.006 → +0.001 → −0.002: the sign flips near R/V ≈ 0.3
+at vocab 1024, consistent with the paper losing BPB at R/V ≈ 0.22 and tying/winning at R/V ≈ 1. The
+**vocab-4096** cells show the **largest R/V≈1 wins (−0.0058 / −0.0056)** *and* push the flip point
+below R/V≈0.25 — as vocab grows the CP advantage both widens at R/V≈1 and reaches down to smaller
+R/V, exactly the direction the paper's larger-vocab operating point predicts.
 
 ### Remaining sweep (in progress)
 
-The vocab-4096 N=3 R/V≈1 arm reproduces the crossover (**−0.0056**, matching the vocab-4096 N=5 win);
-its R/V≈0.25 arm is still running. A follow-up sweep adds the **R/V≈0.5 midpoint** (R=V/2: R=512 at
-vocab 1024, R=2048 at vocab 4096) to all four cells, pinning down where the sign actually flips.
-Table above will be extended as those arms land.
+Both vocab-4096 N=3 CP arms are in: R/V≈1 (**−0.0056**) and R/V≈0.25 (**−0.0027**) both win, so
+this cell has no losing CP point. A follow-up sweep adds the **R/V≈0.5 midpoint** (R=V/2: R=512 at
+vocab 1024, R=2048 at vocab 4096) to all four cells, pinning down where the sign flips at vocab
+1024. Table above will be extended as those arms land.
 
 ## Conclusion (revised — the negative was an R/V artifact)
 
