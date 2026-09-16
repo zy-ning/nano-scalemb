@@ -29,6 +29,19 @@
 # math or the result. If an arm OOMs we retry at half the micro-batch, so a
 # borderline arm degrades in speed instead of dying. Retries are logged.
 #
+# KILL RESILIENCE (why this script checkpoints). Arms on this node are killed by
+# SIGTERM to the WHOLE PROCESS GROUP at unpredictable intervals (observed at
+# 20m/31.7m/45m/45.7m/85m into an arm, 6 times). The kill takes this driver with
+# it, so in-script retry alone cannot help -- and setsid does NOT prevent it.
+# Cause is not identifiable from inside the box (no dmesg access; no OOM, ~580GB
+# RAM free). Mitigation: --save-every=500 plus auto-resume from the newest
+# COMPLETE checkpoint, so a kill costs <=500 steps (~17 min) instead of the whole
+# 2.1h arm. Relaunching this script after a kill picks up where it left off.
+# Cost: ~11GB per save (4.3GB model + 4x1.75GB sharded optim), ~8 saves/arm;
+# disk has ~8PB free. Safe for the headline metric: bpb falls monotonically in
+# these runs so "Minimum validation bpb" is attained at the FINAL eval, which a
+# resumed run still reaches.
+#
 # LADDER (N=5, matching the paper's depth; the cheap R/V .22 point first so the
 # paper-reproduction lands even if the big arms run long):
 #   R=1802 (R/V~0.22)  <- PAPER'S second point; paper reports CP LOSING here
@@ -60,6 +73,7 @@ N="${N:-5}"
 # cheap paper-point first, then ascending rank
 ARMS="${ARMS:-native 1802 2048 4096}"
 DBS="${DBS:-8}"            # device-batch-size; halved once on OOM
+SAVE_EVERY="${SAVE_EVERY:-500}"   # checkpoint cadence; see KILL RESILIENCE below
 WAIT_PID="${WAIT_PID:-}"   # optional pid to wait on so we never contend for GPUs
 
 export TORCHDYNAMO_CACHE_SIZE_LIMIT="${TORCHDYNAMO_CACHE_SIZE_LIMIT:-64}"
@@ -81,19 +95,46 @@ COMMON=(
     --engram-mhc-num-streams="$MHC_STREAMS" --engram-share-memory
     --engram-no-tokenizer-compression
     --eval-every=500 --eval-tokens=10485760
-    --core-metric-every=-1 --sample-every=-1 --save-every=-1
+    --core-metric-every=-1 --sample-every=-1 --save-every="$SAVE_EVERY"
 )
 
-# one attempt at a given micro-batch; returns non-zero on failure
+# Latest step with a COMPLETE checkpoint (model + meta + all NPROC optim shards).
+# An arm killed mid-save can leave a partial set; resuming from that would fail,
+# so every shard must be present before we trust a step.
+latest_complete_ckpt () {
+    local ckpt_dir="$1" step f ok
+    [ -d "$ckpt_dir" ] || { echo ""; return; }
+    for f in $(ls "$ckpt_dir"/model_*.pt 2>/dev/null | sort -r); do
+        step="$(basename "$f" .pt)"; step="${step#model_}"
+        [ -f "$ckpt_dir/meta_${step}.json" ] || continue
+        ok=1
+        for r in $(seq 0 $((NPROC-1))); do
+            [ -f "$ckpt_dir/optim_${step}_rank${r}.pt" ] || { ok=0; break; }
+        done
+        [ "$ok" = 1 ] && { echo "$((10#$step))"; return; }
+    done
+    echo ""
+}
+
+# one attempt at a given micro-batch; returns non-zero on failure.
+# Auto-resumes from the newest complete checkpoint if one exists.
 attempt () {
     local base_dir="$1" n="$2" arm="$3" dbs="$4" log_file="$5"
     local extra=()
     [ "$arm" = "native" ] || extra=(--engram-value-table=tngram --engram-cp-rank="$arm")
+    local model_tag="d20-sv${VOCAB}-N${n}-${arm}-${RUN_SUFFIX}"
+    local resume_step
+    resume_step="$(latest_complete_ckpt "$base_dir/base_checkpoints/$model_tag")"
+    if [ -n "$resume_step" ] && [ "$resume_step" -gt 0 ] 2>/dev/null; then
+        echo "  resuming $model_tag from step $resume_step"
+        echo "=== RESUME from step $resume_step ($(date -Is)) ===" >> "$log_file"
+        extra+=(--resume-from-step="$resume_step")
+    fi
     NANOCHAT_BASE_DIR="$base_dir" "$TORCHRUN" --standalone --nproc_per_node="$NPROC" \
         -m scripts.base_train -- \
         "${COMMON[@]}" --device-batch-size="$dbs" \
         --engram-max-ngram-size="$n" "${extra[@]}" \
-        --model-tag="d20-sv${VOCAB}-N${n}-${arm}-${RUN_SUFFIX}" \
+        --model-tag="$model_tag" \
         >> "$log_file" 2>&1
 }
 
