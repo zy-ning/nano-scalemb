@@ -114,12 +114,29 @@ run_arm () {
     echo "================================================================"
     echo "Starting $tag  ($(date -Is))  vocab=$VOCAB N=$N arm=$arm R/V=$rv dbs=$DBS"
     echo "================================================================"
-    if attempt "$base_dir" "$N" "$arm" "$DBS" "$log_file"; then
-        echo "  $tag done: $(grep -oP 'Minimum validation bpb: \K[0-9.]+' "$log_file" | tail -1)"
-        return
-    fi
+    # Bounded retry on EXTERNAL KILL. Arms on this node have been SIGTERMed
+    # mid-training three times (whole process group, no OOM, GPUs released,
+    # differing durations 31.7m/45.7m -- cause unidentified, setsid did NOT
+    # prevent it). A kill leaves no "Total training time" line, so retry those;
+    # a genuine crash (python traceback / OOM) falls through to the OOM path
+    # below instead of burning retries.
+    local try
+    for try in 1 2 3; do
+        if attempt "$base_dir" "$N" "$arm" "$DBS" "$log_file"; then
+            echo "  $tag done: $(grep -oP 'Minimum validation bpb: \K[0-9.]+' "$log_file" | tail -1)"
+            return
+        fi
+        if tail -200 "$log_file" | grep -qiE "out of memory"; then break; fi
+        if tail -40 "$log_file" | grep -q "Received Signals.SIGTERM death signal"; then
+            echo "  !! $tag externally SIGTERMed (attempt $try/3) at $(date -Is); restarting arm"
+            echo "=== EXTERNAL SIGTERM, RESTART attempt $((try+1)) ($(date -Is)) ===" >> "$log_file"
+            sleep 30
+            continue
+        fi
+        break
+    done
     # OOM retry at half the micro-batch (same total batch -> identical math)
-    if grep -qiE "out of memory|CUDA error: out of memory" "$log_file"; then
+    if tail -200 "$log_file" | grep -qiE "out of memory"; then
         local half=$((DBS/2))
         if [ "$half" -ge 1 ]; then
             echo "  !! $tag OOMed at dbs=$DBS; retrying at dbs=$half (same total batch, identical math)"

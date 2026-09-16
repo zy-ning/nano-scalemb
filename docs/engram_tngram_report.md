@@ -230,9 +230,50 @@ R/V, exactly the direction the paper's larger-vocab operating point predicts.
 ### Remaining sweep (in progress)
 
 Both vocab-4096 N=3 CP arms are in: R/V≈1 (**−0.0056**) and R/V≈0.25 (**−0.0027**) both win, so
-this cell has no losing CP point. A follow-up sweep adds the **R/V≈0.5 midpoint** (R=V/2: R=512 at
-vocab 1024, R=2048 at vocab 4096) to all four cells, pinning down where the sign flips at vocab
-1024. Table above will be extended as those arms land.
+this cell has no losing CP point. The **R/V≈0.5 midpoint** completes it: R=2048 → **0.785972**,
+a **−0.0045** win over native 0.790432. The cell is monotone in R/V (−0.0056 / −0.0045 / −0.0027)
+with **no losing CP point at any rank measured**.
+
+## vocab 8192: we WIN where the paper LOSES
+
+The sections above reproduce the paper's *easy* point (R/V≈1). The paper's **other** operating
+point is **R=1800, vocab=8192 → R/V≈0.22**, and there Table 1 reports TN-gram **losing** BPB
+(1.071 vs 1.070). We had never run at that vocab, so we added a vocab-8192 N=5 cell to test the
+paper's own negative directly — and to get a **third vocab rung**, since the flip point's
+dependence on V cannot be fit from two points.
+
+| step | native | CP R=1802 (R/V≈0.22) | Δ (CP − native) |
+|---|---|---|---|
+| 0 | 3.213328 | 3.213328 | 0.000000 |
+| 500 | 0.973795 | 0.968054 | −0.0057 |
+| 1000 | 0.913526 | 0.909996 | −0.0035 |
+| 1500 | 0.887428 | 0.882799 | −0.0046 |
+| 2000 | 0.867536 | 0.863796 | −0.0037 |
+| 2500 | 0.839489 | 0.835971 | −0.0035 |
+| 3000 | 0.814108 | 0.810518 | −0.0036 |
+| 3500 | 0.791627 | 0.787699 | −0.0039 |
+| **end** | **0.783098** | **0.779004** | **−0.0041** |
+
+**CP wins by 0.0041, below native at every eval.** The identical step-0 bpb (3.213328) confirms
+the two arms share backbone and data exactly. So the paper's larger-vocab negative **does not
+reproduce at our scale**: the crossover keeps sliding to *lower* R/V as vocab grows — flip at
+~R/V 0.3 (vocab 1024), below 0.25 (vocab 4096), and at 8192 even R/V≈0.22 wins comfortably.
+
+**Important framing: the CP win is within-cell, never absolute.** Native anchors keep improving
+with vocab (1024: 0.809668 → 4096: 0.788987 → 8192: 0.783098), and vocab-8192 *native* already
+beats vocab-4096's *best* CP arm (0.783180). CP beats native at fixed vocab; it does not produce
+a better model than simply using a larger vocabulary.
+
+### The real barrier to a 32k stack is memory, not quality
+
+CP A-params = `N·V·K·R` (K=8), so at R/V≈1 they scale as **V²**. Measured peaks at vocab 4096,
+N=5: R/V 0.25 (168M A-params) 71.9 GB, R/V 0.50 (336M) 82.5 GB, R/V 1.0 (671M) 103.7 GB — about
+**60 B per A-param**. Extrapolating, vocab 8192 at R/V≈1 needs 2.68B A-params ≈ **224 GB/GPU**,
+above the GB200's 189 GB: that rung is **not runnable** and was deliberately excluded from the
+ladder (which tops out at R/V≈0.5). This is the practical finding for our stack — the paper's
+winning regime becomes *quadratically* more expensive in vocabulary, which is precisely why it
+cannot be carried to a 32k tokenizer, independent of whether CP is the better representation.
+
 
 ## Conclusion (revised — the negative was an R/V artifact)
 
