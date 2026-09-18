@@ -264,15 +264,70 @@ with vocab (1024: 0.809668 → 4096: 0.788987 → 8192: 0.783098), and vocab-819
 beats vocab-4096's *best* CP arm (0.783180). CP beats native at fixed vocab; it does not produce
 a better model than simply using a larger vocabulary.
 
-### The real barrier to a 32k stack is memory, not quality
+## 32k stack, param-fair: CP loses at every rung (the line closes here)
 
-CP A-params = `N·V·K·R` (K=8), so at R/V≈1 they scale as **V²**. Measured peaks at vocab 4096,
-N=5: R/V 0.25 (168M A-params) 71.9 GB, R/V 0.50 (336M) 82.5 GB, R/V 1.0 (671M) 103.7 GB — about
-**60 B per A-param**. Extrapolating, vocab 8192 at R/V≈1 needs 2.68B A-params ≈ **224 GB/GPU**,
-above the GB200's 189 GB: that rung is **not runnable** and was deliberately excluded from the
-ladder (which tops out at R/V≈0.5). This is the practical finding for our stack — the paper's
-winning regime becomes *quadratically* more expensive in vocabulary, which is precisely why it
-cannot be carried to a 32k tokenizer, independent of whether CP is the better representation.
+The small-vocab sections show CP winning at high R/V. The practical question was whether a
+**feasible** rank suffices at our real 32k tokenizer. Two corrections had to happen first.
+
+**Correction 1 — native value params were mis-stated throughout this thread.** Native value
+params are `rows × head_dim(80)`, so native slot15 is **454.9M params**, not the "5.69M" used
+as an anchor above — that figure is the *row count*. Consequently the original 2026-09-08
+"iso-param" design matched CP A-params to native **rows**, handing CP roughly **80× fewer
+params** than native. Every early "CP loses by +0.006" was measured at a large param deficit.
+
+**Correction 2 — a single native anchor is the wrong bar.** Native improves monotonically with
+table size, so each CP arm needs its own iso-param partner:
+
+| native | value params | min bpb |
+|---|---|---|
+| slot15 | 454.9M | 0.765091 (n=5) |
+| slot30 | 909.7M | ~0.763930 |
+| slot60 | 1819.3M | **0.763434** (fresh) |
+| slot120 | 3638.4M | **0.761636** (fresh) |
+
+slot60/slot120 were re-run on current code rather than reused from Aug-16/Aug-29 lineages;
+drift was +1.1e-4 and **+5.1e-4** respectively. The slot120 drift alone is larger than the
+"win" the naive comparison would have reported, so same-code baselines were necessary.
+
+### The naive read vs the param-fair read
+
+Against the single slot15 anchor, CP looks like it converges to a win — R=6144 crosses below it:
+
+| CP arm | R/V | min bpb | vs slot15 |
+|---|---|---|---|
+| R=1024 | 0.043 | 0.767740 | +0.0026 |
+| R=2048 | 0.086 | 0.766056 | +0.0010 |
+| R=4096 | 0.173 | 0.765874 | +0.0008 |
+| R=6144 | 0.259 | 0.764843 | **−0.0002** |
+
+Against its **iso-param partner**, every arm loses, and the gap is *worst at the top*:
+
+| CP arm | params | bpb | native partner | params | bpb | ratio | Δ |
+|---|---|---|---|---|---|---|---|
+| R=1024 | 582M | 0.767740 | slot15 | 455M | 0.765091 | 1.28× | **+0.0026** |
+| R=2048 | 1164M | 0.766056 | slot30 | 910M | 0.763930 | 1.28× | **+0.0021** |
+| R=4096 | 2328M | 0.765874 | slot60 | 1819M | 0.763434 | 1.28× | **+0.0024** |
+| R=6144 | 3493M | 0.764843 | slot120 | 3638M | 0.761636 | 0.96× | **+0.0032** |
+
+The apparent convergence is an **artifact of holding the baseline fixed while growing CP's
+params 6×**. Native improves just as fast (0.765091 → 0.761636), so the two curves run
+parallel at a roughly constant +0.002–0.003 CP penalty. CP never closes the gap.
+
+Peak memory: R=1024 79.8 GB, R=2048 94.0 GB, R=4096 122.8 GB, R=6144 **150.8 GB** of 189 GB.
+So **R/V ≈ 0.26 is the memory ceiling at 32k**, and the crossover needs far more than that.
+
+### Conclusion
+
+The R/V crossover is **real but within-cell**: at a fixed small vocabulary CP genuinely beats
+native at high R/V, including at the paper's own vocab-8192 / R/V≈0.22 point where the paper
+reports a loss. It does **not** transfer to a 32k stack, because reaching the required R/V
+there is memory-infeasible, and because at every affordable rank an iso-param native table is
+simply better. **Native hash table wins on our production stack** — now for a quantified,
+param-matched reason rather than an assumed one.
+
+Two methodological lessons worth carrying forward: param-match on **params** (`rows × dim`),
+never on rows; and re-run baselines on the same code before trusting any sub-1e-3 delta.
+
 
 
 ## Conclusion (revised — the negative was an R/V artifact)
